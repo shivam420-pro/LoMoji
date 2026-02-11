@@ -13,6 +13,7 @@ import Profile from './pages/Profile';
 import Settings from './pages/Settings';
 import AdminPanel from './pages/Admin';
 import AdminUserDetails from './pages/Admin/UserDetails';
+import ProjectsDashboard from './pages/ProjectsDashboard';
 
 const AppRoutes = () => {
   const { isAuthenticated, loading } = useAuth();
@@ -64,7 +65,23 @@ const AppRoutes = () => {
         }
       />
       <Route
+        path="/projects"
+        element={
+          <ProtectedRoute>
+            <ProjectsDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/animation-tool"
+        element={
+          <ProtectedRoute>
+            <AnimationToolPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/animation-tool/:dashboardId"
         element={
           <ProtectedRoute>
             <AnimationToolPage />

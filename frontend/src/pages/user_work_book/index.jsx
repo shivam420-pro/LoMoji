@@ -48,6 +48,7 @@ const UserWorkBook = () => {
             const data = await res.json();
             setFileCards(
               (data.files || []).map((f) => ({
+                _id: f._id,
                 name: f.fileName,
                 type: f.fileType,
                 date: `Created ${new Date(f.createdAt).toLocaleDateString()}`,
@@ -78,9 +79,13 @@ const UserWorkBook = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [fileMenuOpen]);
 
-  // Handle file click to redirect to AnimationTool
+  // Handle file click to redirect to AnimationTool with MongoDB ID
   const handleFileClick = (file) => {
-    navigate('/animation-tool', { state: { file } });
+    if (file._id) {
+      navigate(`/animation-tool/${file._id}`, { state: { file } });
+    } else {
+      navigate('/animation-tool', { state: { file } });
+    }
   };
 
   // Show delete confirmation dialog
@@ -113,6 +118,7 @@ const UserWorkBook = () => {
             const data = await filesRes.json();
             setFileCards(
               (data.files || []).map((f) => ({
+                _id: f._id,
                 name: f.fileName,
                 type: f.fileType,
                 date: `Created ${new Date(f.createdAt).toLocaleDateString()}`,
@@ -147,12 +153,14 @@ const UserWorkBook = () => {
           body: JSON.stringify({ fileName, fileType }),
         });
         if (res.ok) {
+          const responseData = await res.json();
           // Refresh file list
           const filesRes = await fetch(`/api/user/${encodeURIComponent(user.email)}/files`);
           if (filesRes.ok) {
             const data = await filesRes.json();
             setFileCards(
               (data.files || []).map((f) => ({
+                _id: f._id,
                 name: f.fileName,
                 type: f.fileType,
                 date: `Created ${new Date(f.createdAt).toLocaleDateString()}`,
@@ -166,9 +174,25 @@ const UserWorkBook = () => {
           setSelectedFileType('');
           setNewFileName('');
 
-          // Redirect to AnimationTool page for icon animation, logo emoji, and GIF video files
+          // Redirect to AnimationTool page for icon animation, logo emoji, and GIF video files with MongoDB ID
           if (['icon', 'emoji', 'giff'].includes(fileType)) {
-            navigate('/animation-tool');
+            // If we have the file ID from response, use it; otherwise fetch files to get the ID
+            if (responseData.file && responseData.file._id) {
+              navigate(`/animation-tool/${responseData.file._id}`);
+            } else {
+              // Find the newly created file
+              if (filesRes.ok) {
+                const data = await filesRes.json();
+                const newFile = data.files.find(f => f.fileName === fileName);
+                if (newFile && newFile._id) {
+                  navigate(`/animation-tool/${newFile._id}`);
+                } else {
+                  navigate('/animation-tool');
+                }
+              } else {
+                navigate('/animation-tool');
+              }
+            }
           }
         } else {
           const err = await res.json();

@@ -1,0 +1,2058 @@
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useLocation, useParams } from 'react-router-dom';
+import Switch from '../../components/ui/Switch';
+
+const AnimationTool = () => {
+  const { dashboardId } = useParams();
+  const [animateEnabled, setAnimateEnabled] = useState(false);
+  const [selectedTool, setSelectedTool] = useState(null);
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [lastPoint, setLastPoint] = useState({ x: 0, y: 0 });
+  const [strokes, setStrokes] = useState([]);
+  const [currentStroke, setCurrentStroke] = useState(null);
+  const [selectionStart, setSelectionStart] = useState(null);
+  const [selectionEnd, setSelectionEnd] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [historyStep, setHistoryStep] = useState(-1);
+  const [interactionMode, setInteractionMode] = useState('idle'); // idle, drawing, selecting, moving, resizing, rotating
+  const [activeHandle, setActiveHandle] = useState(null);
+  const [transformStart, setTransformStart] = useState(null); // { mouse: {x,y}, elements: [...] }
+  const [showShapes, setShowShapes] = useState(false);
+  
+  // Timeline & Animation State
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [totalFrames, setTotalFrames] = useState(300); // 10 seconds at 30fps
+  const [fps, setFps] = useState(30);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [autoKeying, setAutoKeying] = useState(false);
+  const [onionSkin, setOnionSkin] = useState(false);
+  const [timelineScale, setTimelineScale] = useState(1); // 1 = 100%
+  const timelineScrollRef = useRef(null);
+  const requestRef = useRef();
+  const previousTimeRef = useRef();
+  const [showSelectMenu, setShowSelectMenu] = useState(false);
+  const [canvasOffset, setCanvasOffset] = useState({ x: 0, y: 0 });
+  const panStartRef = useRef(null);
+  const [layers, setLayers] = useState([{ id: 'layer-1', name: 'Artboard 1', visible: true }]);
+  const [currentLayerId, setCurrentLayerId] = useState('layer-1');
+
+  const shapeButtonRef = useRef(null);
+  const shapeDropdownRef = useRef(null);
+  const selectButtonRef = useRef(null);
+  const selectDropdownRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const imageCacheRef = useRef({});
+  
+  // Backend Integration State
+  const [fileId, setFileId] = useState(null);
+  const [fileName, setFileName] = useState('');
+  const [fileType, setFileType] = useState('icon');
+  const [userEmail, setUserEmail] = useState(null);
+  const [showFileModal, setShowFileModal] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [newFileDetails, setNewFileDetails] = useState({ name: '', type: 'Animation' });
+  const [showLayersPanel, setShowLayersPanel] = useState(true);
+  const [selectedObjects, setSelectedObjects] = useState([]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (
+        showShapes &&
+        shapeDropdownRef.current &&
+        !shapeDropdownRef.current.contains(event.target) &&
+        shapeButtonRef.current &&
+        !shapeButtonRef.current.contains(event.target)
+      ) {
+        setShowShapes(false);
+      }
+      if (
+        showSelectMenu &&
+        selectDropdownRef.current &&
+        !selectDropdownRef.current.contains(event.target) &&
+        selectButtonRef.current &&
+        !selectButtonRef.current.contains(event.target)
+      ) {
+        setShowSelectMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showShapes, showSelectMenu]);
+
+  useEffect(() => {
+    // Try to get user from localStorage
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      try {
+        const parsed = JSON.parse(storedUser);
+        if (parsed.email) setUserEmail(parsed.email);
+      } catch (e) {
+        console.error('Failed to parse user', e);
+      }
+    } else {
+       // Fallback for dev/testing if no auth
+       // setUserEmail('test@example.com'); 
+    }
+  }, []);
+
+  // Load canvas data from MongoDB when dashboardId is available
+  useEffect(() => {
+    const loadCanvasData = async () => {
+      if (dashboardId) {
+        try {
+          const res = await fetch(`/api/file/${dashboardId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.file) {
+              setFileId(data.file._id);
+              setFileName(data.file.fileName);
+              setFileType(data.file.fileType);
+              if (data.file.content && Array.isArray(data.file.content)) {
+                setStrokes(data.file.content);
+                setHistory([data.file.content]);
+                setHistoryStep(0);
+              }
+            }
+          }
+        } catch (err) {
+          console.error('Failed to load canvas data', err);
+        }
+      }
+    };
+    loadCanvasData();
+  }, [dashboardId]);
+
+  // Auto-save
+  useEffect(() => {
+    if (!fileId || !userEmail || strokes.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      setIsSaving(true);
+      try {
+        await fetch(`/api/file/${fileId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: strokes })
+        });
+      } catch (err) {
+        console.error('Auto-save failed', err);
+      } finally {
+        setIsSaving(false);
+      }
+    }, 2000); // Debounce 2s
+
+    return () => clearTimeout(timer);
+  }, [strokes, fileId, userEmail]);
+
+  const createNewFile = async () => {
+    if (!userEmail || !newFileDetails.name) return;
+    try {
+      const res = await fetch(`http://localhost:5000/api/user/${userEmail}/file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: newFileDetails.name,
+          fileType: newFileDetails.type,
+          content: []
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFileId(data.file._id);
+        setFileName(data.file.fileName);
+        setFileType(data.file.fileType);
+        setStrokes([]);
+        setHistory([]);
+        setHistoryStep(-1);
+        setShowFileModal(false);
+      } else {
+        alert(data.error);
+      }
+    } catch (err) {
+      console.error('Create file failed', err);
+      alert('Failed to create file');
+    }
+  };
+
+  const shapesList = [
+    { key: 'rectangle', label: 'Rectangle' },
+    { key: 'circle', label: 'Circle' },
+    { key: 'triangle', label: 'Triangle' },
+    { key: 'ellipse', label: 'Ellipse' },
+    { key: 'pentagon', label: 'Pentagon' },
+    { key: 'hexagon', label: 'Hexagon' },
+    { key: 'octagon', label: 'Octagon' },
+    { key: 'rhombus', label: 'Rhombus' },
+    { key: 'parallelogram', label: 'Parallelogram' },
+    { key: 'star', label: 'Star' },
+    { key: 'semicircle', label: 'Semicircle' },
+    { key: 'arrow', label: 'Arrow' }
+  ];
+
+  const emojiList = [
+    '😀', '😂', '😍', '😎', '😭', '😡', '👍', '👎', '🎉', '❤️', '🔥', '✨'
+  ];
+
+  const addEmoji = (emoji, x, y) => {
+    const size = 60;
+    const newShape = {
+      type: 'emoji',
+      text: emoji,
+      x,
+      y,
+      width: size,
+      height: size,
+      rotation: 0,
+      selected: true, // Auto-select the newly added emoji
+      hidden: false,
+      layerId: currentLayerId,
+      id: Date.now() + Math.random(),
+      keyframes: [
+        {
+          frame: currentFrame,
+          x,
+          y,
+          width: size,
+          height: size,
+          rotation: 0
+        }
+      ]
+    };
+    // Deselect all other elements
+    const updatedStrokes = strokes.map(s => ({ ...s, selected: false }));
+    const newStrokes = [...updatedStrokes, newShape];
+    saveHistory(newStrokes);
+    // Auto-switch to select tool
+    setSelectedTool('select');
+  };
+
+  const handleFileImport = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        const size = Math.min(200, img.width || 200, img.height || 200);
+        const newImageStroke = {
+          type: 'image',
+          data: event.target.result,
+          x: centerX,
+          y: centerY,
+          width: size,
+          height: size,
+          rotation: 0,
+          selected: false,
+          hidden: false,
+          layerId: currentLayerId,
+          id: Date.now() + Math.random(),
+          keyframes: [
+            {
+              frame: currentFrame,
+              x: centerX,
+              y: centerY,
+              width: size,
+              height: size,
+              rotation: 0
+            }
+          ]
+        };
+        const newStrokes = [...strokes, newImageStroke];
+        saveHistory(newStrokes);
+        imageCacheRef.current[newImageStroke.id] = img;
+        renderCanvas();
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const saveHistory = (newStrokes) => {
+    const deepCopiedStrokes = JSON.parse(JSON.stringify(newStrokes));
+    let newHistory = history.slice(0, historyStep + 1);
+    newHistory.push(deepCopiedStrokes);
+    if (newHistory.length > 20) {
+      newHistory.shift();
+    }
+    setHistory(newHistory);
+    setHistoryStep(newHistory.length - 1);
+    setStrokes(newStrokes);
+  };
+
+  const undo = () => {
+    if (historyStep > 0) {
+      const prevStrokes = history[historyStep - 1];
+      setStrokes(JSON.parse(JSON.stringify(prevStrokes)));
+      setHistoryStep(historyStep - 1);
+    } else if (historyStep === 0) {
+      setStrokes([]);
+      setHistoryStep(-1);
+    }
+  };
+
+  const redo = () => {
+    if (historyStep < history.length - 1) {
+      const nextStrokes = history[historyStep + 1];
+      setStrokes(JSON.parse(JSON.stringify(nextStrokes)));
+      setHistoryStep(historyStep + 1);
+    }
+  };
+
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Ignore inputs
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+
+      // Undo/Redo
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      } 
+      // Delete Object
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (e.key === 'Backspace') e.preventDefault(); // Prevent back nav
+        
+        const selected = strokes.filter(s => s.selected);
+        if (selected.length > 0) {
+           const newStrokes = strokes.filter(s => !s.selected);
+           saveHistory(newStrokes);
+        }
+      }
+      // Insert Keyframe (I)
+      else if (e.key.toLowerCase() === 'i') {
+         const selected = strokes.filter(s => s.selected);
+         if (selected.length > 0) {
+            selected.forEach(s => {
+               updateKeyframe(s.id, { x: s.x, y: s.y, width: s.width, height: s.height, rotation: s.rotation });
+            });
+         }
+      }
+      // Select All (Ctrl+A)
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+         e.preventDefault();
+         setStrokes(prev => prev.map(s => ({ ...s, selected: true })));
+      }
+      // Toggle Playback (Space)
+      else if (e.key === ' ') {
+         e.preventDefault();
+         setIsPlaying(prev => !prev);
+      }
+      // Tool shortcuts
+      else if (e.key.toLowerCase() === 'v') {
+         setSelectedTool('select');
+      } else if (e.key.toLowerCase() === 'k') {
+         setSelectedTool('scale');
+      } else if (e.key.toLowerCase() === 'h') {
+         setSelectedTool('hand');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [strokes, history, historyStep, isPlaying]);
+
+  const handleAnimateToggle = (checked) => {
+    setAnimateEnabled(checked);
+  };
+  const handleToolClick = (tool) => {
+    setSelectedTool(tool);
+    if (tool === 'rectangle') setShowShapes((v) => !v);
+  };
+
+  // Z-index control functions
+  const bringToFront = (strokeId) => {
+    const index = strokes.findIndex(s => s.id === strokeId);
+    if (index !== -1 && index < strokes.length - 1) {
+      const newStrokes = [...strokes];
+      const [item] = newStrokes.splice(index, 1);
+      newStrokes.push(item);
+      setStrokes(newStrokes);
+      addToHistory(newStrokes);
+    }
+  };
+
+  const sendToBack = (strokeId) => {
+    const index = strokes.findIndex(s => s.id === strokeId);
+    if (index !== -1 && index > 0) {
+      const newStrokes = [...strokes];
+      const [item] = newStrokes.splice(index, 1);
+      newStrokes.unshift(item);
+      setStrokes(newStrokes);
+      addToHistory(newStrokes);
+    }
+  };
+
+  const bringForward = (strokeId) => {
+    const index = strokes.findIndex(s => s.id === strokeId);
+    if (index !== -1 && index < strokes.length - 1) {
+      const newStrokes = [...strokes];
+      [newStrokes[index], newStrokes[index + 1]] = [newStrokes[index + 1], newStrokes[index]];
+      setStrokes(newStrokes);
+      addToHistory(newStrokes);
+    }
+  };
+
+  const sendBackward = (strokeId) => {
+    const index = strokes.findIndex(s => s.id === strokeId);
+    if (index !== -1 && index > 0) {
+      const newStrokes = [...strokes];
+      [newStrokes[index], newStrokes[index - 1]] = [newStrokes[index - 1], newStrokes[index]];
+      setStrokes(newStrokes);
+      addToHistory(newStrokes);
+    }
+  };
+
+  const deleteObject = (strokeId) => {
+    const newStrokes = strokes.filter(s => s.id !== strokeId);
+    setStrokes(newStrokes);
+    addToHistory(newStrokes);
+  };
+
+  const getPos = (canvas, event) => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left - canvasOffset.x, y: event.clientY - rect.top - canvasOffset.y };
+  };
+  const drawShapePath = (ctx, type, x, y, w, h) => {
+    const rx = w / 2;
+    const ry = h / 2;
+    if (type === 'rectangle') {
+      ctx.rect(x - rx, y - ry, w, h);
+    } else if (type === 'circle') {
+      ctx.ellipse(x, y, rx, rx, 0, 0, Math.PI * 2);
+    } else if (type === 'triangle') {
+      ctx.moveTo(x, y - ry);
+      ctx.lineTo(x - rx, y + ry);
+      ctx.lineTo(x + rx, y + ry);
+      ctx.closePath();
+    } else if (type === 'ellipse') {
+      ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    } else if (type === 'pentagon') {
+      const points = [];
+      const r = Math.min(rx, ry);
+      for (let i = 0; i < 5; i++) {
+        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
+        points.push({ x: x + rx * Math.cos(ang), y: y + ry * Math.sin(ang) });
+      }
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+      ctx.closePath();
+    } else if (type === 'hexagon') {
+      const points = [];
+      for (let i = 0; i < 6; i++) {
+        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / 6;
+        points.push({ x: x + rx * Math.cos(ang), y: y + ry * Math.sin(ang) });
+      }
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+      ctx.closePath();
+    } else if (type === 'octagon') {
+      const points = [];
+      for (let i = 0; i < 8; i++) {
+        const ang = -Math.PI / 8 + (i * 2 * Math.PI) / 8;
+        points.push({ x: x + rx * Math.cos(ang), y: y + ry * Math.sin(ang) });
+      }
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+      ctx.closePath();
+    } else if (type === 'rhombus') {
+      ctx.moveTo(x, y - ry);
+      ctx.lineTo(x + rx, y);
+      ctx.lineTo(x, y + ry);
+      ctx.lineTo(x - rx, y);
+      ctx.closePath();
+    } else if (type === 'parallelogram') {
+      const skew = w * 0.25;
+      ctx.moveTo(x - rx + skew, y - ry);
+      ctx.lineTo(x + rx + skew, y - ry);
+      ctx.lineTo(x + rx - skew, y + ry);
+      ctx.lineTo(x - rx - skew, y + ry);
+      ctx.closePath();
+    } else if (type === 'star') {
+      const outerX = rx;
+      const outerY = ry;
+      const innerX = rx * 0.45;
+      const innerY = ry * 0.45;
+      const points = [];
+      for (let i = 0; i < 10; i++) {
+        const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+        const radX = i % 2 === 0 ? outerX : innerX;
+        const radY = i % 2 === 0 ? outerY : innerY;
+        points.push({ x: x + radX * Math.cos(ang), y: y + radY * Math.sin(ang) });
+      }
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+      ctx.closePath();
+    } else if (type === 'semicircle') {
+      ctx.arc(x, y, rx, 0, Math.PI, false);
+      ctx.closePath();
+    } else if (type === 'arrow') {
+      const sh = h * 0.4;
+      ctx.moveTo(x - rx, y - sh / 2);
+      ctx.lineTo(x, y - sh / 2);
+      ctx.lineTo(x, y - ry);
+      ctx.lineTo(x + rx, y);
+      ctx.lineTo(x, y + ry);
+      ctx.lineTo(x, y + sh / 2);
+      ctx.lineTo(x - rx, y + sh / 2);
+      ctx.closePath();
+    }
+  };
+
+  const addShape = (type, x, y) => {
+    const size = 100;
+    const newShape = {
+      type: 'shape',
+      shape: type,
+      x,
+      y,
+      width: size,
+      height: size,
+      rotation: 0,
+      selected: true, // Auto-select the newly added shape
+      hidden: false,
+      layerId: currentLayerId,
+      id: Date.now() + Math.random(),
+      keyframes: [
+        {
+          frame: currentFrame,
+          x,
+          y,
+          width: size,
+          height: size,
+          rotation: 0
+        }
+      ]
+    };
+    // Deselect all other elements
+    const updatedStrokes = strokes.map(s => ({ ...s, selected: false }));
+    const newStrokes = [...updatedStrokes, newShape];
+    saveHistory(newStrokes);
+    // Auto-switch to select tool
+    setSelectedTool('select');
+  };
+
+  // --- Animation & Keyframe Logic ---
+
+  const interpolateValue = (val1, val2, t) => {
+    return val1 + (val2 - val1) * t;
+  };
+
+  const getInterpolatedState = (stroke, frame) => {
+    if (!stroke.keyframes || stroke.keyframes.length === 0) return stroke;
+
+    const sortedKeys = [...stroke.keyframes].sort((a, b) => a.frame - b.frame);
+    
+    // Before first keyframe
+    if (frame <= sortedKeys[0].frame) {
+      const k = sortedKeys[0];
+      return { ...stroke, x: k.x, y: k.y, width: k.width, height: k.height, rotation: k.rotation };
+    }
+
+    // After last keyframe
+    if (frame >= sortedKeys[sortedKeys.length - 1].frame) {
+      const k = sortedKeys[sortedKeys.length - 1];
+      return { ...stroke, x: k.x, y: k.y, width: k.width, height: k.height, rotation: k.rotation };
+    }
+
+    // Between keyframes
+    for (let i = 0; i < sortedKeys.length - 1; i++) {
+      const k1 = sortedKeys[i];
+      const k2 = sortedKeys[i + 1];
+      if (frame >= k1.frame && frame < k2.frame) {
+        const t = (frame - k1.frame) / (k2.frame - k1.frame);
+        // Add easing logic here later
+        return {
+          ...stroke,
+          x: interpolateValue(k1.x, k2.x, t),
+          y: interpolateValue(k1.y, k2.y, t),
+          width: interpolateValue(k1.width, k2.width, t),
+          height: interpolateValue(k1.height, k2.height, t),
+          rotation: interpolateValue(k1.rotation, k2.rotation, t)
+        };
+      }
+    }
+    return stroke;
+  };
+
+  const updateCanvasForFrame = (frame) => {
+    // Only update properties that are animated, keep selection state etc.
+    // But here we need to update state to trigger re-render
+    // WARNING: Calling setStrokes in a loop or high frequency needs care.
+    // Ideally we'd use a ref for render loop, but for React state we need to commit eventually.
+    // For playback, we can update state.
+    
+    setStrokes(prevStrokes => {
+      return prevStrokes.map(s => {
+        if (s.type === 'shape' || s.type === 'emoji' || s.type === 'image') {
+           return getInterpolatedState(s, frame);
+        }
+        return s;
+      });
+    });
+  };
+
+  const animate = (time) => {
+    if (previousTimeRef.current !== undefined) {
+      const deltaTime = time - previousTimeRef.current;
+      // Calculate frames to advance
+      // const framesToAdvance = (deltaTime / 1000) * fps; 
+      // Simple approach: check if enough time passed for 1 frame
+      
+      const msPerFrame = 1000 / fps;
+      if (deltaTime >= msPerFrame) {
+         setCurrentFrame(prev => {
+           const next = prev + 1;
+           if (next > totalFrames) return 0; // Loop
+           return next;
+         });
+         previousTimeRef.current = time;
+      }
+    } else {
+      previousTimeRef.current = time;
+    }
+    if (isPlaying) {
+       requestRef.current = requestAnimationFrame(animate);
+    }
+  };
+
+  useEffect(() => {
+    if (isPlaying) {
+      requestRef.current = requestAnimationFrame(animate);
+    } else {
+      cancelAnimationFrame(requestRef.current);
+      previousTimeRef.current = undefined;
+    }
+    return () => cancelAnimationFrame(requestRef.current);
+  }, [isPlaying, fps, totalFrames]);
+
+  useEffect(() => {
+    // Sync canvas when frame changes
+    updateCanvasForFrame(currentFrame);
+  }, [currentFrame]);
+
+  const togglePlay = () => setIsPlaying(!isPlaying);
+
+  const updateKeyframe = (strokeId, newProps) => {
+    setStrokes(prev => prev.map(s => {
+      if (s.id === strokeId && (s.type === 'shape' || s.type === 'emoji' || s.type === 'image')) {
+        const newKeys = s.keyframes ? [...s.keyframes] : [];
+        const existingIndex = newKeys.findIndex(k => k.frame === currentFrame);
+        
+        const keyData = {
+          frame: currentFrame,
+          x: newProps.x !== undefined ? newProps.x : s.x,
+          y: newProps.y !== undefined ? newProps.y : s.y,
+          width: newProps.width !== undefined ? newProps.width : s.width,
+          height: newProps.height !== undefined ? newProps.height : s.height,
+          rotation: newProps.rotation !== undefined ? newProps.rotation : s.rotation
+        };
+
+        if (existingIndex !== -1) {
+          newKeys[existingIndex] = { ...newKeys[existingIndex], ...keyData };
+        } else {
+          newKeys.push(keyData);
+          newKeys.sort((a, b) => a.frame - b.frame);
+        }
+        return { ...s, keyframes: newKeys };
+      }
+      return s;
+    }));
+  };
+
+  const handleTimelineScrub = (e) => {
+     const rect = timelineScrollRef.current.getBoundingClientRect();
+     const x = e.clientX - rect.left + timelineScrollRef.current.scrollLeft;
+     // 10px per frame at scale 1? Let's define pixels per frame
+     const pixelsPerFrame = 10 * timelineScale;
+     const frame = Math.max(0, Math.min(totalFrames, Math.floor(x / pixelsPerFrame)));
+     setCurrentFrame(frame);
+  };
+
+  // --- End Animation Logic ---
+
+  const rotatePoint = (x, y, cx, cy, angle) => {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const nx = (cos * (x - cx)) + (sin * (y - cy)) + cx;
+    const ny = (cos * (y - cy)) - (sin * (x - cx)) + cy;
+    return { x: nx, y: ny };
+  };
+
+  const getHandleCoords = (s) => {
+    const { x, y, width, height, rotation } = s;
+    const w2 = width / 2;
+    const h2 = height / 2;
+    // Unrotated coords
+    const coords = {
+      tl: { x: x - w2, y: y - h2 },
+      t: { x: x, y: y - h2 },
+      tr: { x: x + w2, y: y - h2 },
+      r: { x: x + w2, y: y },
+      br: { x: x + w2, y: y + h2 },
+      b: { x: x, y: y + h2 },
+      bl: { x: x - w2, y: y + h2 },
+      l: { x: x - w2, y: y },
+      rot: { x: x, y: y - h2 - 20 }
+    };
+    // Rotate all
+    Object.keys(coords).forEach(k => {
+      coords[k] = rotatePoint(coords[k].x, coords[k].y, x, y, rotation);
+    });
+    return coords;
+  };
+
+  const drawStroke = (ctx, s) => {
+    ctx.save();
+    if (s.type === 'shape') {
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.rotation);
+      ctx.translate(-s.x, -s.y);
+      ctx.strokeStyle = '#1c1b25';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      drawShapePath(ctx, s.shape, s.x, s.y, s.width, s.height);
+      ctx.stroke();
+    } else if (s.type === 'emoji') {
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.rotation);
+      ctx.translate(-s.x, -s.y);
+      ctx.font = `${s.width}px serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(s.text || s.emoji, s.x, s.y);
+    } else if (s.type === 'image') {
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.rotation);
+      ctx.translate(-s.x, -s.y);
+      let img = imageCacheRef.current[s.id];
+      if (!img) {
+        img = new Image();
+        img.src = s.data;
+        imageCacheRef.current[s.id] = img;
+      }
+      if (img) {
+        ctx.drawImage(img, s.x - s.width / 2, s.y - s.height / 2, s.width, s.height);
+      }
+    } else {
+      // Freehand
+      ctx.strokeStyle = s.selected ? '#7270ff' : '#1c1b25';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      if (s.points && s.points.length) {
+        ctx.moveTo(s.points[0].x, s.points[0].y);
+        for (let i = 1; i < s.points.length; i++) {
+          ctx.lineTo(s.points[i].x, s.points[i].y);
+        }
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  const renderCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(canvasOffset.x, canvasOffset.y);
+
+    // Onion Skin
+    if (onionSkin && currentFrame > 0) {
+      const skinFrame = Math.max(0, currentFrame - 3);
+      strokes.forEach((s) => {
+        const skinState = getInterpolatedState(s, skinFrame);
+        ctx.save();
+        ctx.globalAlpha = 0.2; // Faint ghost
+        // Draw ghost without selection color/highlight
+        drawStroke(ctx, { ...skinState, selected: false });
+        ctx.restore();
+      });
+    }
+
+    strokes.forEach((s) => {
+      const layer = layers.find(l => l.id === (s.layerId || 'layer-1'));
+      if (s.hidden || (layer && !layer.visible)) return;
+      drawStroke(ctx, s);
+
+      // Selection UI
+      if (s.selected && selectedTool === 'select') {
+        const handles = getHandleCoords(s);
+        
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        ctx.rotate(s.rotation);
+        ctx.translate(-s.x, -s.y);
+        
+        // Bounding box
+        ctx.strokeStyle = '#388bff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(s.x - s.width/2, s.y - s.height/2, s.width, s.height);
+        
+        // Rotate handle line
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y - s.height/2);
+        ctx.lineTo(s.x, s.y - s.height/2 - 20);
+        ctx.stroke();
+        ctx.restore();
+
+        // Draw handles (unrotated circles at rotated positions)
+        Object.entries(handles).forEach(([key, pos]) => {
+          ctx.beginPath();
+          ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+          ctx.strokeStyle = '#388bff';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        });
+      }
+    });
+
+    if (currentStroke && currentStroke.points.length) {
+      ctx.strokeStyle = '#1c1b25';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(currentStroke.points[0].x, currentStroke.points[0].y);
+      for (let i = 1; i < currentStroke.points.length; i++) {
+        ctx.lineTo(currentStroke.points[i].x, currentStroke.points[i].y);
+      }
+      ctx.stroke();
+    }
+
+    if (selectionStart && selectionEnd) {
+      const x = Math.min(selectionStart.x, selectionEnd.x);
+      const y = Math.min(selectionStart.y, selectionEnd.y);
+      const w = Math.abs(selectionEnd.x - selectionStart.x);
+      const h = Math.abs(selectionEnd.y - selectionStart.y);
+      ctx.strokeStyle = '#388bff';
+      ctx.fillStyle = 'rgba(56,139,255,0.12)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  const hitTest = (x, y) => {
+    // Check handles of selected items first
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const s = strokes[i];
+      if (s.selected && (s.type === 'shape' || s.type === 'emoji' || s.type === 'image')) {
+        const handles = getHandleCoords(s);
+        for (const [key, pos] of Object.entries(handles)) {
+          if (Math.hypot(pos.x - x, pos.y - y) <= 6) {
+            return { index: i, type: 'handle', handle: key };
+          }
+        }
+      }
+    }
+
+    // Check bodies
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const s = strokes[i];
+      if (s.type === 'shape' || s.type === 'emoji' || s.type === 'image') {
+        // Rotate point back
+        const p = rotatePoint(x, y, s.x, s.y, -s.rotation);
+        if (Math.abs(p.x - s.x) <= s.width / 2 && Math.abs(p.y - s.y) <= s.height / 2) {
+          return { index: i, type: 'body' };
+        }
+      } else if (s.bbox) {
+        // Simple bbox check for freehand
+        if (x >= s.bbox.x1 && x <= s.bbox.x2 && y >= s.bbox.y1 && y <= s.bbox.y2) {
+          return { index: i, type: 'body' };
+        }
+      }
+    }
+    return null;
+  };
+
+  const startDrawing = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const pos = getPos(canvas, e);
+    const rect = canvas.getBoundingClientRect();
+    const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
+    if (selectedTool === 'hand') {
+      panStartRef.current = { mouse: rawPos, offset: { ...canvasOffset } };
+      setIsDrawing(true);
+      renderCanvas();
+      return;
+    }
+
+    if (selectedTool === 'scale') {
+      const selectedIndices = strokes.map((st, i) => st.selected ? i : -1).filter(i => i !== -1);
+      if (selectedIndices.length > 0) {
+        setInteractionMode('resizing');
+        setActiveHandle('br');
+        setTransformStart({
+          mouse: pos,
+          elements: selectedIndices.map(i => JSON.parse(JSON.stringify(strokes[i])))
+        });
+        renderCanvas();
+        return;
+      }
+    }
+
+    if (selectedTool === 'select') {
+      const hit = hitTest(pos.x, pos.y);
+      
+      if (hit) {
+        const isMulti = e.shiftKey;
+        const s = strokes[hit.index];
+        
+        // Update selection
+        let newStrokes = [...strokes];
+        if (!s.selected && !isMulti) {
+          newStrokes = newStrokes.map(st => ({ ...st, selected: false }));
+          newStrokes[hit.index].selected = true;
+          setStrokes(newStrokes); // Don't save history for simple select click yet?
+        } else if (isMulti) {
+          newStrokes[hit.index].selected = !newStrokes[hit.index].selected;
+          setStrokes(newStrokes);
+        } else if (!s.selected) {
+           newStrokes = newStrokes.map(st => ({ ...st, selected: false }));
+           newStrokes[hit.index].selected = true;
+           setStrokes(newStrokes);
+        }
+        
+        if (hit.type === 'handle') {
+          setInteractionMode(hit.handle === 'rot' ? 'rotating' : 'resizing');
+          setActiveHandle(hit.handle);
+        } else {
+          setInteractionMode('moving');
+        }
+        
+        // Prepare transform start
+        const selectedIndices = newStrokes.map((st, i) => st.selected ? i : -1).filter(i => i !== -1);
+        setTransformStart({
+          mouse: pos,
+          elements: selectedIndices.map(i => JSON.parse(JSON.stringify(newStrokes[i])))
+        });
+        
+      } else {
+        // Clicked on empty space
+        if (!e.shiftKey) {
+           setStrokes(strokes.map(s => ({ ...s, selected: false })));
+        }
+        setSelectionStart(pos);
+        setSelectionEnd(pos);
+        setInteractionMode('selecting');
+      }
+      renderCanvas();
+      return;
+    }
+
+    setIsDrawing(true);
+    setCurrentStroke({ points: [pos] });
+    renderCanvas();
+  };
+
+  const draw = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const pos = getPos(canvas, e);
+    const rect = canvas.getBoundingClientRect();
+    const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
+    if (selectedTool === 'hand') {
+      if (!panStartRef.current) return;
+      const dx = rawPos.x - panStartRef.current.mouse.x;
+      const dy = rawPos.y - panStartRef.current.mouse.y;
+      setCanvasOffset({ x: panStartRef.current.offset.x + dx, y: panStartRef.current.offset.y + dy });
+      renderCanvas();
+      return;
+    }
+
+    if (selectedTool === 'select' || selectedTool === 'scale') {
+      if (interactionMode === 'selecting') {
+        if (!selectionStart) return;
+        setSelectionEnd(pos);
+        renderCanvas();
+      } else if (interactionMode === 'moving' && transformStart) {
+        const dx = pos.x - transformStart.mouse.x;
+        const dy = pos.y - transformStart.mouse.y;
+        
+        const newStrokes = [...strokes];
+        transformStart.elements.forEach((startEl, i) => {
+          // Find current index (assuming order hasn't changed, which it shouldn't)
+          const index = strokes.findIndex(s => s.id === startEl.id); // Need ID! Added ID in addShape
+          if (index !== -1) {
+            if (newStrokes[index].type === 'shape' || newStrokes[index].type === 'emoji' || newStrokes[index].type === 'image') {
+              newStrokes[index].x = startEl.x + dx;
+              newStrokes[index].y = startEl.y + dy;
+            } else {
+              // Freehand move
+              const movePts = startEl.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+              newStrokes[index].points = movePts;
+              // Update bbox
+              const xs = movePts.map(p => p.x);
+              const ys = movePts.map(p => p.y);
+              newStrokes[index].bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+            }
+          }
+        });
+        setStrokes(newStrokes);
+        renderCanvas();
+      } else if (interactionMode === 'rotating' && transformStart) {
+        // Rotate logic
+        const newStrokes = [...strokes];
+        transformStart.elements.forEach((startEl) => {
+          const index = strokes.findIndex(s => s.id === startEl.id);
+          if (index !== -1 && (newStrokes[index].type === 'shape' || newStrokes[index].type === 'emoji' || newStrokes[index].type === 'image')) {
+             // Angle from center to mouse
+             const angle = Math.atan2(pos.y - startEl.y, pos.x - startEl.x);
+             const startAngle = Math.atan2(transformStart.mouse.y - startEl.y, transformStart.mouse.x - startEl.x);
+             newStrokes[index].rotation = startEl.rotation + (angle - startAngle);
+          }
+        });
+        setStrokes(newStrokes);
+        renderCanvas();
+      } else if (interactionMode === 'resizing' && transformStart) {
+        const newStrokes = [...strokes];
+        transformStart.elements.forEach((startEl) => {
+          const index = strokes.findIndex(s => s.id === startEl.id);
+          if (index !== -1 && (newStrokes[index].type === 'shape' || newStrokes[index].type === 'emoji' || newStrokes[index].type === 'image')) {
+             const el = newStrokes[index];
+             
+             // Rotate mouse pos back to axis aligned space relative to center
+             const p = rotatePoint(pos.x, pos.y, startEl.x, startEl.y, -startEl.rotation);
+             const startP = rotatePoint(transformStart.mouse.x, transformStart.mouse.y, startEl.x, startEl.y, -startEl.rotation);
+             const dx = p.x - startP.x;
+             const dy = p.y - startP.y;
+
+             // Proportional scaling for corners
+             const isCorner = ['tl', 'tr', 'bl', 'br'].includes(activeHandle);
+             const aspectRatio = startEl.width / startEl.height;
+             
+             let newW = startEl.width;
+             let newH = startEl.height;
+             
+             if (activeHandle === 'r') newW += dx;
+             if (activeHandle === 'l') newW -= dx;
+             if (activeHandle === 'b') newH += dy;
+             if (activeHandle === 't') newH -= dy;
+             
+             if (isCorner) {
+                // Simple symmetric scaling from center for now or corner based?
+                // Canva scales from opposite corner. 
+                // Implementing center-based scaling is easier, but corner-based is expected.
+                // Let's do simple center-based scaling for MVP or it gets complex with rotation.
+                // Center-based: dragging corner expands shape in all directions relative to center.
+                // If I want opposite corner fixed, I need to move center too.
+                
+                // Let's try simple width/height adjustment first.
+                if (activeHandle === 'br') { newW += dx; newH = newW / aspectRatio; }
+                if (activeHandle === 'bl') { newW -= dx; newH = newW / aspectRatio; }
+                if (activeHandle === 'tr') { newW += dx; newH = newW / aspectRatio; }
+                if (activeHandle === 'tl') { newW -= dx; newH = newW / aspectRatio; }
+             }
+             
+             el.width = Math.max(10, newW);
+             el.height = Math.max(10, newH);
+          }
+        });
+        setStrokes(newStrokes);
+        renderCanvas();
+      }
+      return;
+    }
+
+    if (!isDrawing || !currentStroke) return;
+    setCurrentStroke((prev) => {
+      const next = { ...prev, points: [...prev.points, pos] };
+      return next;
+    });
+    renderCanvas();
+  };
+
+  const endDrawing = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (selectedTool === 'hand') {
+      panStartRef.current = null;
+      setIsDrawing(false);
+      renderCanvas();
+      return;
+    }
+
+    if (selectedTool === 'select' || selectedTool === 'scale') {
+      if (interactionMode === 'selecting') {
+        if (selectionStart && selectionEnd) {
+          const rx1 = Math.min(selectionStart.x, selectionEnd.x);
+          const ry1 = Math.min(selectionStart.y, selectionEnd.y);
+          const rx2 = Math.max(selectionStart.x, selectionEnd.x);
+            const ry2 = Math.max(selectionStart.y, selectionEnd.y);
+            const intersects = (bbox) => !(bbox.x2 < rx1 || bbox.x1 > rx2 || bbox.y2 < ry1 || bbox.y1 > ry2);
+            const nextStrokes = strokes.map((s) => {
+               let bbox = s.bbox;
+               if (s.type === 'shape' || s.type === 'emoji' || s.type === 'image') {
+                  bbox = { x1: s.x - s.width/2, y1: s.y - s.height/2, x2: s.x + s.width/2, y2: s.y + s.height/2 };
+               }
+               if (!bbox) return { ...s, selected: false };
+               return { ...s, selected: intersects(bbox) };
+            });
+          setStrokes(nextStrokes);
+        }
+        setSelectionStart(null);
+        setSelectionEnd(null);
+      } else if (interactionMode !== 'idle') {
+        // Finished moving/resizing/rotating
+        if (transformStart) {
+           // Auto-Keying Check
+           if (autoKeying) {
+             const selected = strokes.filter(s => s.selected);
+             selected.forEach(s => {
+               updateKeyframe(s.id, { x: s.x, y: s.y, width: s.width, height: s.height, rotation: s.rotation });
+             });
+           }
+          saveHistory(strokes); // Save state
+        }
+      }
+      setInteractionMode('idle');
+      setTransformStart(null);
+      renderCanvas();
+      return;
+    }
+
+    if (isDrawing && currentStroke) {
+      const pts = currentStroke.points;
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+      // Add ID to freehand strokes too
+      const newStroke = { 
+        type: 'freehand', 
+        points: pts, 
+        bbox, 
+        selected: false,
+        hidden: false,
+        layerId: currentLayerId,
+        id: Date.now() + Math.random() 
+      };
+      const newStrokes = [...strokes, newStroke];
+      saveHistory(newStrokes);
+      setCurrentStroke(null);
+      setIsDrawing(false);
+      renderCanvas();
+    } else {
+      setIsDrawing(false);
+    }
+  };
+  const handleCanvasDrop = (e) => {
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    // For drag-and-drop, we want the actual mouse position relative to canvas
+    // WITHOUT subtracting canvasOffset (which is only for panning)
+    const rect = canvas.getBoundingClientRect();
+    const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const type = e.dataTransfer.getData('shape');
+    const emoji = e.dataTransfer.getData('emoji');
+    if (type) addShape(type, pos.x, pos.y);
+    if (emoji) addEmoji(emoji, pos.x, pos.y);
+  };
+  const handleCanvasDragOver = (e) => {
+    e.preventDefault();
+  };
+
+  return (
+    <div className="w-full h-screen bg-[url('/images/img_.png')] bg-cover bg-center flex flex-col">
+      {/* Top Toolbar */}
+      <div className="flex flex-row justify-start items-center w-full px-4 py-3 gap-4 bg-gray-100">
+        {/* Left Toolbar Section */}
+        <div className="flex flex-row justify-start items-center flex-1 gap-4">
+          {/* Tool Group 1 */}
+          <div className="flex flex-row justify-center items-center bg-white rounded-2xl shadow-[0px_1px_2px_#0000000c] px-3 py-3">
+            <div className="flex flex-row justify-center items-center w-auto">
+              <div className="relative w-16 h-11 flex justify-end items-center">
+                <img
+                  src="/images/img_menuitem_menuitem.svg"
+                  alt="Menu item"
+                  className="w-[50px] h-10"
+                />
+                <img
+                  src="/images/img_group_1.svg"
+                  alt="Group"
+                  className="absolute top-0 left-0 w-[34px] h-9"
+                />
+              </div>
+              <div className="w-[1px] h-3 bg-[#d1d5db] ml-2"></div>
+            </div>
+          </div>
+
+          {/* Dashboard ID Display */}
+          {dashboardId && (
+            <div className="flex items-center bg-white rounded-lg shadow px-3 py-2 border border-purple-200">
+              <span className="text-xs font-medium text-purple-600">
+                ID: {dashboardId.substring(0, 8)}...
+              </span>
+            </div>
+          )}
+
+          {/* Tool Group 2 */}
+          <div className="flex flex-row justify-center items-center bg-white rounded-full border border-[#e5e7eb] shadow-lg px-4 py-2 gap-4">
+             {/* New File Button */}
+            <button
+              type="button"
+              onClick={() => setShowFileModal(true)}
+              className="flex items-center gap-1 px-3 py-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <span className="text-xl">+</span>
+              <span className="text-xs font-medium text-gray-700">New</span>
+            </button>
+            <div className="w-[1px] h-3 bg-[#d1d5db]"></div>
+
+            <button
+              type="button"
+              aria-label="Selection tool"
+              ref={selectButtonRef}
+              onClick={() => handleToolClick('select')}
+              onDoubleClick={() => setShowSelectMenu(true)}
+              onMouseEnter={() => setShowSelectMenu(true)}
+              className={`rounded-xl ${selectedTool === 'select' ? 'ring-2 ring-blue-500' : ''}`}
+            >
+              <img
+                src="/images/img_menuitem_button.svg"
+                alt="Selection tool"
+                className="w-[50px] h-10 cursor-pointer"
+              />
+            </button>
+            {showShapes && (
+              <div ref={shapeDropdownRef} className="absolute mt-28 bg-white border border-[#e5e7eb] rounded-xl shadow-lg p-3 z-50">
+                <div className="mb-2">
+                  <span className="text-xs font-medium text-gray-500 mb-2 block">Shapes</span>
+                  <div className="grid grid-cols-4 gap-3">
+                    {shapesList.map((item) => (
+                      <div
+                        key={item.key}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('shape', item.key);
+                        }}
+                        className="w-14 h-14 flex items-center justify-center rounded-md hover:bg-[#f6f6f6] border border-[#e5e7eb] cursor-grab active:cursor-grabbing"
+                      >
+                        <svg viewBox="0 0 100 100" className="w-10 h-10 stroke-[#1c1b25] fill-none" strokeWidth="4">
+                          {item.key === 'rectangle' && <rect x="18" y="18" width="64" height="64" rx="4" />}
+                          {item.key === 'circle' && <circle cx="50" cy="50" r="28" />}
+                          {item.key === 'triangle' && <polygon points="50,20 20,80 80,80" />}
+                          {item.key === 'ellipse' && <ellipse cx="50" cy="50" rx="28" ry="18" />}
+                          {item.key === 'pentagon' && <polygon points="50,18 20,45 32,82 68,82 80,45" />}
+                          {item.key === 'hexagon' && <polygon points="30,20 70,20 90,50 70,80 30,80 10,50" />}
+                          {item.key === 'octagon' && <polygon points="35,20 65,20 85,35 85,65 65,80 35,80 15,65 15,35" />}
+                          {item.key === 'rhombus' && <polygon points="50,20 80,50 50,80 20,50" />}
+                          {item.key === 'parallelogram' && <polygon points="30,20 85,20 70,80 15,80" />}
+                          {item.key === 'star' && <polygon points="50,15 60,40 88,40 65,58 72,85 50,70 28,85 35,58 12,40 40,40" />}
+                          {item.key === 'semicircle' && <path d="M20 60 A30 30 0 0 1 80 60 L20 60 Z" />}
+                          {item.key === 'arrow' && <path d="M20 40 H55 V25 L85 50 L55 75 V60 H20 Z" />}
+                        </svg>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100 pt-2">
+                  <span className="text-xs font-medium text-gray-500 mb-2 block">Emojis</span>
+                  <div className="grid grid-cols-4 gap-3">
+                    {emojiList.map((emoji, index) => (
+                      <div
+                        key={index}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('emoji', emoji);
+                        }}
+                        className="w-14 h-14 flex items-center justify-center rounded-md hover:bg-[#f6f6f6] border border-[#e5e7eb] cursor-grab active:cursor-grabbing text-2xl"
+                      >
+                        {emoji}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            {showSelectMenu && (
+              <div ref={selectDropdownRef} className="absolute mt-28 bg-white border border-[#e5e7eb] rounded-xl shadow-lg p-3 z-50">
+                <div className="flex flex-col gap-2">
+                  <button
+                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-[#f6f6f6] text-sm text-[#1c1b25]"
+                    onClick={() => { setSelectedTool('select'); setShowSelectMenu(false); }}
+                  >
+                    <span className="text-[#7270ff]">Move / select tool</span>
+                    <span className="ml-auto text-xs text-gray-500">(V)</span>
+                  </button>
+                  <button
+                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-[#f6f6f6] text-sm text-[#1c1b25]"
+                    onClick={() => { setSelectedTool('scale'); setShowSelectMenu(false); }}
+                  >
+                    <span>Scale tool</span>
+                    <span className="ml-auto text-xs text-gray-500">(K)</span>
+                  </button>
+                  <button
+                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-[#f6f6f6] text-sm text-[#1c1b25]"
+                    onClick={() => { setSelectedTool('hand'); setShowSelectMenu(false); }}
+                  >
+                    <span>Hand tool</span>
+                    <span className="ml-auto text-xs text-gray-500">(H)</span>
+                  </button>
+                </div>
+              </div>
+            )}
+            <button
+              type="button"
+              ref={shapeButtonRef}
+              aria-label="Rectangle tool"
+              onClick={() => handleToolClick('rectangle')}
+              className={`rounded-xl ${selectedTool === 'rectangle' ? 'ring-2 ring-blue-500' : ''}`}
+            >
+              <img
+                src="/images/img_menuitem_rectangle.svg"
+                alt="Rectangle tool"
+                className="w-[50px] h-10 cursor-pointer"
+              />
+            </button>
+            {showShapes && (
+              <div ref={shapeDropdownRef} className="absolute mt-28 bg-white border border-[#e5e7eb] rounded-xl shadow-lg p-3 z-50">
+                <div className="mb-2">
+                  <span className="text-xs font-medium text-gray-500 mb-2 block">Shapes</span>
+                  <div className="grid grid-cols-4 gap-3">
+                    {shapesList.map((item) => (
+                      <div
+                        key={item.key}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('shape', item.key);
+                        }}
+                        className="w-14 h-14 flex items-center justify-center rounded-md hover:bg-[#f6f6f6] border border-[#e5e7eb] cursor-grab active:cursor-grabbing"
+                      >
+                        <svg viewBox="0 0 100 100" className="w-10 h-10 stroke-[#1c1b25] fill-none" strokeWidth="4">
+                          {item.key === 'rectangle' && <rect x="18" y="18" width="64" height="64" rx="4" />}
+                          {item.key === 'circle' && <circle cx="50" cy="50" r="28" />}
+                          {item.key === 'triangle' && <polygon points="50,20 20,80 80,80" />}
+                          {item.key === 'ellipse' && <ellipse cx="50" cy="50" rx="28" ry="18" />}
+                          {item.key === 'pentagon' && <polygon points="50,18 20,45 32,82 68,82 80,45" />}
+                          {item.key === 'hexagon' && <polygon points="30,20 70,20 90,50 70,80 30,80 10,50" />}
+                          {item.key === 'octagon' && <polygon points="35,20 65,20 85,35 85,65 65,80 35,80 15,65 15,35" />}
+                          {item.key === 'rhombus' && <polygon points="50,20 80,50 50,80 20,50" />}
+                          {item.key === 'parallelogram' && <polygon points="30,20 85,20 70,80 15,80" />}
+                          {item.key === 'star' && <polygon points="50,15 60,40 88,40 65,58 72,85 50,70 28,85 35,58 12,40 40,40" />}
+                          {item.key === 'semicircle' && <path d="M20 60 A30 30 0 0 1 80 60 L20 60 Z" />}
+                          {item.key === 'arrow' && <path d="M20 40 H55 V25 L85 50 L55 75 V60 H20 Z" />}
+                        </svg>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100 pt-2">
+                  <span className="text-xs font-medium text-gray-500 mb-2 block">Emojis</span>
+                  <div className="grid grid-cols-4 gap-3">
+                    {emojiList.map((emoji, index) => (
+                      <div
+                        key={index}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('emoji', emoji);
+                        }}
+                        className="w-14 h-14 flex items-center justify-center rounded-md hover:bg-[#f6f6f6] border border-[#e5e7eb] cursor-grab active:cursor-grabbing text-2xl"
+                      >
+                        {emoji}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            <button
+              type="button"
+              aria-label="Tool A"
+              onClick={() => handleToolClick('tool-a')}
+              className={`rounded-xl ${selectedTool === 'tool-a' ? 'ring-2 ring-blue-500' : ''}`}
+            >
+              <img
+                src="/images/img_menuitem_button_gray_900_01.svg"
+                alt="Tool"
+                className="w-[50px] h-10 cursor-pointer"
+              />
+            </button>
+            <button
+              type="button"
+              aria-label="Tool B"
+              onClick={() => handleToolClick('tool-b')}
+              className={`rounded-xl ${selectedTool === 'tool-b' ? 'ring-2 ring-blue-500' : ''}`}
+            >
+              <img
+                src="/images/img_menuitem_button_gray_900_01_40x50.svg"
+                alt="Tool"
+                className="w-[50px] h-10 cursor-pointer"
+              />
+            </button>
+            <button
+              type="button"
+              aria-label="Tool C"
+              onClick={() => {
+                if (fileInputRef.current) fileInputRef.current.click();
+              }}
+              className={`rounded-xl ${selectedTool === 'tool-c' ? 'ring-2 ring-blue-500' : ''}`}
+            >
+              <img
+                src="/images/img_menuitem_button_40x50.svg"
+                alt="Import Image"
+                className="w-[50px] h-10 cursor-pointer"
+              />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".svg,image/*"
+              className="hidden"
+              onChange={handleFileImport}
+            />
+            <button
+              type="button"
+              aria-label="Tool D"
+              onClick={() => handleToolClick('tool-d')}
+              className={`rounded-xl ${selectedTool === 'tool-d' ? 'ring-2 ring-blue-500' : ''}`}
+            >
+              <img
+                src="/images/img_menuitem_button_1.svg"
+                alt="Tool"
+                className="w-[50px] h-10 cursor-pointer"
+              />
+            </button>
+            
+            <div className="w-[1px] h-3 bg-[#d1d5db]"></div>
+            
+            {/* Undo/Redo Group */}
+            <div className="flex flex-row items-center gap-1">
+              <button
+                type="button"
+                onClick={undo}
+                className="p-1.5 hover:bg-gray-100 rounded-full transition-colors"
+                title="Undo"
+              >
+                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={redo}
+                className="p-1.5 hover:bg-gray-100 rounded-full transition-colors"
+                title="Redo"
+              >
+                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="w-[1px] h-3 bg-[#d1d5db]"></div>
+            
+            <button
+              type="button"
+              aria-label="Animation"
+              role="switch"
+              aria-checked={animateEnabled}
+              onClick={() => handleAnimateToggle(!animateEnabled)}
+              className={`ml-2 flex items-center gap-2 px-3 py-1.5 rounded-full border transition-colors duration-200 ${
+                animateEnabled ? 'bg-blue-50 border-blue-400' : 'bg-[#f6f6f6] border-[#d1d5db]'
+              }`}
+            >
+              <span className="text-xs font-medium text-[#1c1b25]">Animation</span>
+              <span className="relative inline-flex items-center w-9 h-5 bg-white rounded-full">
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-[#7270ff] transition-transform duration-200 ${
+                    animateEnabled ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </span>
+            </button>
+            {isSaving && <span className="text-xs text-gray-400">Saving...</span>}
+          </div>
+        </div>
+
+        {/* Animate Toggle */}
+        <div className="flex flex-row justify-center items-center bg-white rounded-2xl shadow-[0px_1px_2px_#0000000c] px-4 py-3">
+          <div className="flex flex-row justify-center items-center px-2 py-2.5">
+            <div className="flex flex-row justify-center items-center border border-[#7270ff] rounded-lg px-1.5 py-1.5">
+              <span className="text-xs font-medium text-[#7270ff] text-center">Share</span>
+            </div>
+            <button className="bg-[#7270ff] border border-[#7270ff] rounded-lg px-8 py-1.5 ml-2">
+              <span className="text-xs font-medium text-white text-center">Export</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex flex-row justify-start items-start flex-1 px-4 gap-4 bg-gray-100">
+        {/* Left Panel - Artboard Info + Layers + Objects */}
+        <div className="flex flex-col justify-start items-start bg-white rounded-2xl shadow-[0px_2px_4px_#9ca3af19] p-3 w-64 gap-3">
+          {/* Artboard Title */}
+          <div className="flex flex-col w-full border-b border-gray-200 pb-3">
+            <span className="text-sm font-semibold text-[#1c1b25]">Artboard 1</span>
+            <span className="text-xs text-[#a6a4b0] mt-1">Create shapes and emojis</span>
+          </div>
+
+          {/* Layers Section */}
+          <div className="w-full">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-[#1c1b25]">Layers</span>
+              <button
+                className="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                onClick={() => {
+                  const nextIndex = layers.length + 1;
+                  const newLayer = { id: `layer-${Date.now()}`, name: `Layer ${nextIndex}`, visible: true };
+                  setLayers([...layers, newLayer]);
+                  setCurrentLayerId(newLayer.id);
+                }}
+              >
+                + Add
+              </button>
+            </div>
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              {layers.map((layer) => (
+                <div
+                  key={layer.id}
+                  className={`flex items-center gap-2 px-3 py-2 text-xs cursor-pointer border-b border-gray-100 last:border-b-0 transition-colors ${
+                    currentLayerId === layer.id ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-gray-50'
+                  }`}
+                  onClick={() => setCurrentLayerId(layer.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    const strokeId = e.dataTransfer.getData('stroke-id');
+                    if (!strokeId) return;
+                    setStrokes((prev) => prev.map((s) => s.id.toString() === strokeId ? { ...s, layerId: layer.id } : s));
+                  }}
+                >
+                  <button
+                    className="text-gray-600 hover:text-gray-800 transition-colors"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, visible: !l.visible } : l));
+                    }}
+                    title={layer.visible ? 'Hide layer' : 'Show layer'}
+                  >
+                    {layer.visible ? '👁️' : '🚫'}
+                  </button>
+                  <input
+                    className="flex-1 bg-transparent outline-none font-medium"
+                    value={layer.name}
+                    onChange={(e) => setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, name: e.target.value } : l))}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Objects Section */}
+          <div className="w-full">
+            <div className="text-xs font-semibold text-[#1c1b25] mb-2">Objects</div>
+            <div className="border border-gray-200 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+              {strokes.filter(s => (s.layerId || 'layer-1') === currentLayerId).length === 0 ? (
+                <div className="px-3 py-4 text-xs text-gray-400 text-center">
+                  No objects in this layer
+                </div>
+              ) : (
+                strokes.filter(s => (s.layerId || 'layer-1') === currentLayerId).map((stroke, index) => (
+                  <div
+                    key={stroke.id}
+                    className={`flex items-center gap-2 px-3 py-2 text-xs border-b border-gray-100 last:border-b-0 cursor-pointer transition-colors ${
+                      stroke.selected ? 'bg-blue-50 text-blue-700 border-l-2 border-l-blue-500' : 'text-gray-700 hover:bg-gray-50'
+                    }`}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('stroke-id', stroke.id.toString())}
+                    onClick={() => {
+                      setStrokes(prev => prev.map(s => s.id === stroke.id ? { ...s, selected: !s.selected } : s));
+                    }}
+                  >
+                    <button
+                      className="text-gray-600 hover:text-gray-800 transition-colors"
+                      title={stroke.hidden ? 'Show object' : 'Hide object'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setStrokes(prev => prev.map(s => s.id === stroke.id ? { ...s, hidden: !s.hidden } : s));
+                      }}
+                    >
+                      {stroke.hidden ? '🚫' : '👁️'}
+                    </button>
+                    <span className="truncate flex-1 font-medium">
+                      {stroke.type === 'emoji' ? `${stroke.text || '😀'}` : stroke.type === 'shape' ? `${stroke.shape}` : stroke.type} {index + 1}
+                    </span>
+                    <button
+                      className="text-red-500 hover:text-red-700 transition-colors"
+                      title="Delete object"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const newStrokes = strokes.filter(s => s.id !== stroke.id);
+                        saveHistory(newStrokes);
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-[0px_2px_4px_#9ca3af19] p-3 border border-[#e5e7eb]">
+            <canvas
+              ref={canvasRef}
+              width={700}
+              height={450}
+              className="bg-white rounded-xl border border-[#e5e7eb]"
+              onMouseDown={startDrawing}
+              onMouseMove={draw}
+              onMouseUp={endDrawing}
+              onMouseLeave={endDrawing}
+              onDrop={handleCanvasDrop}
+              onDragOver={handleCanvasDragOver}
+            />
+          </div>
+        </div>
+        {/* Right Panel - Artboard Properties */}
+        <div className="sticky top-3 ml-auto flex flex-col bg-white rounded-2xl shadow-[0px_2px_4px_#9ca3af19] w-64 p-4 gap-4">
+          <div className="flex flex-col gap-3">
+            <span className="text-sm font-semibold text-[#1c1b25]">Properties</span>
+
+            {/* Size */}
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-medium text-[#6b7280]">Canvas Size</span>
+              <div className="flex gap-2">
+                <div className="flex items-center gap-1 bg-[#f6f6f6] rounded px-2 py-1.5 flex-1">
+                  <span className="text-xs text-gray-400">W:</span>
+                  <span className="text-xs font-medium text-[#1c1b25]">1200</span>
+                </div>
+                <div className="flex items-center gap-1 bg-[#f6f6f6] rounded px-2 py-1.5 flex-1">
+                  <span className="text-xs text-gray-400">H:</span>
+                  <span className="text-xs font-medium text-[#1c1b25]">900</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Duration */}
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-medium text-[#6b7280]">Duration</span>
+              <div className="bg-[#f6f6f6] rounded px-3 py-1.5">
+                <span className="text-xs font-medium text-[#1c1b25]">3 seconds</span>
+              </div>
+            </div>
+
+            {/* Background */}
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-medium text-[#6b7280]">Background</span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 bg-[#f6f6f6] rounded px-3 py-1.5 flex-1">
+                  <div className="w-4 h-4 rounded border border-gray-300 bg-white"></div>
+                  <span className="text-xs font-medium text-[#1c1b25]">Transparent</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Frame Rate */}
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-medium text-[#6b7280]">Frame Rate</span>
+              <div className="bg-[#f6f6f6] rounded px-3 py-1.5">
+                <span className="text-xs font-medium text-[#1c1b25]">30 FPS</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Timeline - Dynamic Implementation */}
+      <div className="flex flex-col w-full h-64 bg-white border-t border-gray-200 mt-auto">
+        {/* Timeline Toolbar */}
+        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
+          <div className="flex items-center gap-4">
+            {/* Playback Controls */}
+            <button
+              className="p-1 hover:bg-gray-200 rounded"
+              onClick={() => setIsPlaying(!isPlaying)}
+            >
+              {isPlaying ? (
+                <span className="font-bold text-gray-700 text-lg w-6 h-6 flex items-center justify-center">||</span>
+              ) : (
+                <img
+                  src="/images/img_button_play_pause.svg"
+                  alt="Play"
+                  className="w-6 h-6"
+                />
+              )}
+            </button>
+
+            {/* Time Display */}
+            <div className="flex items-center gap-2 text-sm font-mono bg-white px-2 py-1 rounded border border-gray-300">
+              <span className="text-blue-600 font-bold">{currentFrame}</span>
+              <span className="text-gray-400">/</span>
+              <span className="text-gray-600">{totalFrames}</span>
+              <span className="text-xs text-gray-400 ml-1">f</span>
+            </div>
+
+            {/* FPS Selection */}
+            <select
+              value={fps}
+              onChange={(e) => setFps(Number(e.target.value))}
+              className="text-xs border border-gray-300 rounded px-1 py-1"
+            >
+              <option value={12}>12 FPS</option>
+              <option value={24}>24 FPS</option>
+              <option value={30}>30 FPS</option>
+              <option value={60}>60 FPS</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {/* Auto-Keying Toggle */}
+            <button
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${
+                autoKeying
+                  ? 'bg-red-100 text-red-600 border-red-200'
+                  : 'bg-white text-gray-600 border-gray-300'
+              }`}
+              onClick={() => setAutoKeying(!autoKeying)}
+              title="Auto-Keying: Automatically create keyframes when moving objects"
+            >
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  autoKeying ? 'bg-red-500' : 'bg-gray-400'
+                }`}
+              ></div>
+              Auto-Key
+            </button>
+
+            {/* Onion Skin Toggle */}
+            <button
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${
+                onionSkin
+                  ? 'bg-blue-100 text-blue-600 border-blue-200'
+                  : 'bg-white text-gray-600 border-gray-300'
+              }`}
+              onClick={() => setOnionSkin(!onionSkin)}
+            >
+              Onion Skin
+            </button>
+
+            {/* Zoom Controls */}
+            <div className="flex items-center border border-gray-300 rounded overflow-hidden">
+              <button
+                className="px-2 py-1 hover:bg-gray-100 text-gray-600"
+                onClick={() => setTimelineScale(Math.max(0.5, timelineScale - 0.25))}
+              >
+                -
+              </button>
+              <span className="px-2 text-xs text-gray-500">
+                {Math.round(timelineScale * 100)}%
+              </span>
+              <button
+                className="px-2 py-1 hover:bg-gray-100 text-gray-600"
+                onClick={() => setTimelineScale(Math.min(3, timelineScale + 0.25))}
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Timeline Tracks Area */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Track Headers (Left Sidebar) */}
+          <div className="w-48 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto">
+            <div className="h-8 border-b border-gray-200 flex items-center px-2 text-xs font-bold text-gray-700 bg-gray-100">
+              Master
+            </div>
+            {strokes.map((stroke, index) => (
+              <div
+                key={stroke.id}
+                className={`h-8 border-b border-gray-200 flex items-center px-2 text-xs ${
+                  stroke.selected ? 'bg-blue-50 text-blue-700' : 'text-gray-600'
+                } cursor-pointer hover:bg-gray-100`}
+                onClick={() => {
+                }}
+              >
+                <span className="truncate w-full">
+                  {stroke.type === 'text'
+                    ? stroke.text || 'Text'
+                    : stroke.type === 'emoji'
+                    ? stroke.emoji
+                    : stroke.type}{' '}
+                  {index + 1}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Timeline Ruler & Keyframes (Scrollable Area) */}
+          <div
+            className="flex-1 flex flex-col overflow-x-auto overflow-y-auto relative"
+            ref={timelineScrollRef}
+          >
+            {/* Ruler */}
+            <div
+              className="h-8 border-b border-gray-200 bg-gray-100 relative min-w-full cursor-pointer"
+              style={{ width: `${totalFrames * 20 * timelineScale}px` }}
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const frame = Math.floor(clickX / (20 * timelineScale));
+                setCurrentFrame(Math.max(0, Math.min(frame, totalFrames)));
+              }}
+            >
+              {/* Ticks */}
+              {Array.from({ length: Math.ceil(totalFrames / 5) }).map((_, i) => {
+                const frameNum = i * 5;
+                const leftPos = frameNum * 20 * timelineScale;
+                return (
+                  <div
+                    key={i}
+                    className="absolute bottom-0 border-l border-gray-400"
+                    style={{
+                      left: `${leftPos}px`,
+                      height: i % 2 === 0 ? '100%' : '50%',
+                    }}
+                  >
+                    {i % 2 === 0 && (
+                      <span className="text-[10px] text-gray-500 ml-1">
+                        {frameNum}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Playhead (Red Indicator) */}
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none"
+                style={{
+                  left: `${currentFrame * 20 * timelineScale}px`,
+                  height: '1000px',
+                }} // Height extends down
+              >
+                <div className="w-3 h-3 bg-red-500 transform -translate-x-1/2 rotate-45 -mt-1.5"></div>
+              </div>
+            </div>
+
+            {/* Keyframe Tracks */}
+            <div
+              className="relative min-w-full"
+              style={{ width: `${totalFrames * 20 * timelineScale}px` }}
+            >
+              {/* Grid Lines */}
+              {Array.from({ length: Math.ceil(totalFrames / 5) }).map((_, i) => (
+                <div
+                  key={`grid-${i}`}
+                  className="absolute top-0 bottom-0 border-l border-gray-100 pointer-events-none"
+                  style={{
+                    left: `${i * 5 * 20 * timelineScale}px`,
+                    height: '100%',
+                  }}
+                />
+              ))}
+
+              {strokes.map((stroke) => (
+                <div
+                  key={stroke.id}
+                  className="h-8 border-b border-gray-100 relative"
+                >
+                  {stroke.keyframes &&
+                    stroke.keyframes.map((kf, kfIndex) => (
+                      <div
+                        key={kfIndex}
+                        className="absolute top-1/2 w-3 h-3 bg-blue-500 transform -translate-y-1/2 -translate-x-1/2 rotate-45 border border-white shadow-sm cursor-pointer hover:bg-blue-600 z-10"
+                        style={{
+                          left: `${kf.frame * 20 * timelineScale}px`,
+                        }}
+                        title={`Keyframe at ${kf.frame}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCurrentFrame(kf.frame);
+                        }}
+                      ></div>
+                    ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Layers Panel */}
+      {showLayersPanel && (
+        <div className="fixed right-0 top-24 bottom-0 w-80 bg-white border-l border-gray-300 shadow-lg z-40 overflow-y-auto">
+          <div className="flex items-center justify-between p-3 border-b border-gray-200 bg-gray-50">
+            <h3 className="font-bold text-sm text-gray-700">Layers ({strokes.length})</h3>
+            <button
+              onClick={() => setShowLayersPanel(false)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="p-2 space-y-1">
+            {strokes.length === 0 ? (
+              <div className="text-center text-gray-400 text-sm py-8">
+                No objects yet. Add shapes, text, or images to see them here.
+              </div>
+            ) : (
+              [...strokes].reverse().map((stroke, reverseIndex) => {
+                const actualIndex = strokes.length - 1 - reverseIndex;
+                return (
+                  <div
+                    key={stroke.id}
+                    className="group flex items-center gap-2 p-2 rounded hover:bg-gray-50 border border-transparent hover:border-gray-200"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-xs text-gray-700 truncate">
+                        {stroke.type === 'text' ? `Text: ${stroke.text || 'Empty'}` :
+                         stroke.type === 'shape' ? `Shape: ${stroke.shapeType}` :
+                         stroke.type === 'emoji' ? `Emoji: ${stroke.emoji}` :
+                         stroke.type === 'image' ? 'Image' :
+                         `Path #${actualIndex + 1}`}
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        Layer {actualIndex + 1} of {strokes.length}
+                      </div>
+                    </div>
+
+                    {/* Z-index Controls */}
+                    <div className="flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => bringToFront(stroke.id)}
+                        className="p-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                        title="Bring to Front"
+                      >
+                        ⬆️⬆️
+                      </button>
+                      <button
+                        onClick={() => bringForward(stroke.id)}
+                        className="p-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                        title="Bring Forward"
+                      >
+                        ⬆️
+                      </button>
+                      <button
+                        onClick={() => sendBackward(stroke.id)}
+                        className="p-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                        title="Send Backward"
+                      >
+                        ⬇️
+                      </button>
+                      <button
+                        onClick={() => sendToBack(stroke.id)}
+                        className="p-1 text-xs bg-gray-100 hover:bg-gray-200 rounded"
+                        title="Send to Back"
+                      >
+                        ⬇️⬇️
+                      </button>
+                    </div>
+
+                    {/* Delete Button */}
+                    <button
+                      onClick={() => deleteObject(stroke.id)}
+                      className="p-1.5 text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="p-3 border-t border-gray-200 bg-gray-50 text-xs text-gray-500">
+            💾 {isSaving ? 'Saving...' : 'Auto-save enabled'}
+          </div>
+        </div>
+      )}
+
+      {/* Toggle Layers Panel Button */}
+      {!showLayersPanel && (
+        <button
+          onClick={() => setShowLayersPanel(true)}
+          className="fixed right-4 top-24 bg-white border border-gray-300 shadow-lg rounded-lg px-3 py-2 hover:bg-gray-50 z-40 text-sm font-medium"
+        >
+          📋 Layers ({strokes.length})
+        </button>
+      )}
+
+      {/* New File Modal */}
+      {showFileModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
+          <div className="bg-white rounded-xl p-6 w-96 shadow-xl">
+            <h2 className="text-xl font-bold mb-4">Create New File</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">File Name</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                  value={newFileDetails.name}
+                  onChange={(e) => setNewFileDetails({ ...newFileDetails, name: e.target.value })}
+                  placeholder="My Awesome Project"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                <select
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                  value={newFileDetails.type}
+                  onChange={(e) => setNewFileDetails({ ...newFileDetails, type: e.target.value })}
+                >
+                  <option value="icon">Icon Animation</option>
+                  <option value="emoji">Logo, Emoji Creation</option>
+                  <option value="giff">GIF Creation</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setShowFileModal(false)}
+                  className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={createNewFile}
+                  className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg"
+                  disabled={!newFileDetails.name}
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AnimationTool;

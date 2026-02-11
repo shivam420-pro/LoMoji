@@ -1,1823 +1,2060 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
-import Switch from '../../components/ui/Switch';
+import { useParams } from 'react-router-dom';
+import './AnimationTool.css';
+import AssetsPanel from './AssetsPanel';
+import TextAssetsPanel from './TextAssetsPanel';
+import AnimationPresetsDialog from './AnimationPresetsDialog';
+import AnimationAssetsPanel from './AnimationAssetsPanel';
+
+// Easing functions for smooth animations
+const easingFunctions = {
+  linear: (t) => t,
+  easeIn: (t) => t * t,
+  easeOut: (t) => t * (2 - t),
+  easeInOut: (t) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t,
+  easeInCubic: (t) => t * t * t,
+  easeOutCubic: (t) => (--t) * t * t + 1,
+  easeInOutCubic: (t) => t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1
+};
 
 const AnimationTool = () => {
-  const [animateEnabled, setAnimateEnabled] = useState(false);
-  const [selectedTool, setSelectedTool] = useState(null);
+  const { dashboardId } = useParams();
   const canvasRef = useRef(null);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [lastPoint, setLastPoint] = useState({ x: 0, y: 0 });
-  const [strokes, setStrokes] = useState([]);
-  const [currentStroke, setCurrentStroke] = useState(null);
-  const [selectionStart, setSelectionStart] = useState(null);
-  const [selectionEnd, setSelectionEnd] = useState(null);
-  const [history, setHistory] = useState([]);
-  const [historyStep, setHistoryStep] = useState(-1);
-  const [interactionMode, setInteractionMode] = useState('idle'); // idle, drawing, selecting, moving, resizing, rotating
-  const [activeHandle, setActiveHandle] = useState(null);
-  const [transformStart, setTransformStart] = useState(null); // { mouse: {x,y}, elements: [...] }
-  const [showShapes, setShowShapes] = useState(false);
-  
-  // Timeline & Animation State
+  const timelineScrollRef = useRef(null);
+  const requestRef = useRef();
+  const previousTimeRef = useRef();
+
+  // Canvas and Objects State
+  const [objects, setObjects] = useState([]);
+  const [selectedObjectIds, setSelectedObjectIds] = useState([]);
+  const [canvasOffset, setCanvasOffset] = useState({ x: 0, y: 0 });
+
+  // Timeline State
   const [currentFrame, setCurrentFrame] = useState(0);
   const [totalFrames, setTotalFrames] = useState(300); // 10 seconds at 30fps
   const [fps, setFps] = useState(30);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [loopEnabled, setLoopEnabled] = useState(true);
+  const [timelineZoom, setTimelineZoom] = useState(1);
+
+  // Keyframes State
+  const [keyframes, setKeyframes] = useState({});
   const [autoKeying, setAutoKeying] = useState(false);
-  const [onionSkin, setOnionSkin] = useState(false);
-  const [timelineScale, setTimelineScale] = useState(1); // 1 = 100%
-  const timelineScrollRef = useRef(null);
-  const requestRef = useRef();
-  const previousTimeRef = useRef();
-  const [showSelectMenu, setShowSelectMenu] = useState(false);
-  const [canvasOffset, setCanvasOffset] = useState({ x: 0, y: 0 });
-  const panStartRef = useRef(null);
-  const [layers, setLayers] = useState([{ id: 'layer-1', name: 'Artboard 1', visible: true }]);
-  const [currentLayerId, setCurrentLayerId] = useState('layer-1');
 
-  const shapeButtonRef = useRef(null);
-  const shapeDropdownRef = useRef(null);
-  const selectButtonRef = useRef(null);
-  const selectDropdownRef = useRef(null);
-  const fileInputRef = useRef(null);
-  const imageCacheRef = useRef({});
-  
-  // Backend Integration State
+  // UI State
+  const [selectedTool, setSelectedTool] = useState('select');
+  const [showLayersPanel, setShowLayersPanel] = useState(true);
+  const [showPropertiesPanel, setShowPropertiesPanel] = useState(true);
+  const [showAssetsPanel, setShowAssetsPanel] = useState(false);
+  const [expandedLayers, setExpandedLayers] = useState({});
+  const [assetSearchQuery, setAssetSearchQuery] = useState('');
+  const [selectedAssetCategory, setSelectedAssetCategory] = useState('all');
+  const [leftPanelView, setLeftPanelView] = useState('layers'); // 'layers', 'assets', 'text', or 'animation'
+  const [showToolPopup, setShowToolPopup] = useState(false);
+  const toolPopupRef = useRef(null);
+  const [animationSearchQuery, setAnimationSearchQuery] = useState('');
+  const [selectedAnimationCategory, setSelectedAnimationCategory] = useState('all');
+
+  // File State
   const [fileId, setFileId] = useState(null);
-  const [fileName, setFileName] = useState('');
-  const [fileType, setFileType] = useState('icon');
-  const [userEmail, setUserEmail] = useState(null);
-  const [showFileModal, setShowFileModal] = useState(false);
+  const [fileName, setFileName] = useState('Untitled Animation');
   const [isSaving, setIsSaving] = useState(false);
-  const [newFileDetails, setNewFileDetails] = useState({ name: '', type: 'Animation' });
 
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (
-        showShapes &&
-        shapeDropdownRef.current &&
-        !shapeDropdownRef.current.contains(event.target) &&
-        shapeButtonRef.current &&
-        !shapeButtonRef.current.contains(event.target)
-      ) {
-        setShowShapes(false);
+  // History State
+  const [history, setHistory] = useState([]);
+  const [historyStep, setHistoryStep] = useState(-1);
+
+  // Interaction State
+  const [interactionMode, setInteractionMode] = useState('idle');
+  const [dragStart, setDragStart] = useState(null);
+  const [transformStart, setTransformStart] = useState(null);
+
+  // Text Editing State
+  const [editingTextId, setEditingTextId] = useState(null);
+  const [textInputValue, setTextInputValue] = useState('');
+  const [textInputPosition, setTextInputPosition] = useState({ x: 0, y: 0 });
+  const textInputRef = useRef(null);
+
+  // User info (from localStorage or session)
+  const [userEmail, setUserEmail] = useState(null);
+  const [userId, setUserId] = useState(null);
+
+  // Animation Presets Dialog State
+  const [showAnimationPresetsDialog, setShowAnimationPresetsDialog] = useState(false);
+
+  // Properties Panel Tab State
+  const [propertiesPanelTab, setPropertiesPanelTab] = useState('properties'); // 'properties' or 'animation'
+
+  // ===============================================
+  // KEYFRAME INTERPOLATION ENGINE
+  // ===============================================
+
+  const getInterpolatedValue = useCallback((objectId, property, frame) => {
+    const objectKeyframes = keyframes[objectId];
+    if (!objectKeyframes || !objectKeyframes[property]) {
+      const obj = objects.find(o => o.id === objectId);
+      return obj ? obj[property] : null;
+    }
+
+    const propertyKeyframes = objectKeyframes[property].sort((a, b) => a.frame - b.frame);
+
+    // Find surrounding keyframes
+    let prevKf = null;
+    let nextKf = null;
+
+    for (let i = 0; i < propertyKeyframes.length; i++) {
+      if (propertyKeyframes[i].frame <= frame) {
+        prevKf = propertyKeyframes[i];
       }
-      if (
-        showSelectMenu &&
-        selectDropdownRef.current &&
-        !selectDropdownRef.current.contains(event.target) &&
-        selectButtonRef.current &&
-        !selectButtonRef.current.contains(event.target)
-      ) {
-        setShowSelectMenu(false);
+      if (propertyKeyframes[i].frame >= frame && !nextKf) {
+        nextKf = propertyKeyframes[i];
       }
+    }
+
+    // If exactly on a keyframe
+    if (prevKf && prevKf.frame === frame) return prevKf.value;
+    if (nextKf && nextKf.frame === frame) return nextKf.value;
+
+    // If before first keyframe or after last
+    if (!prevKf) return nextKf ? nextKf.value : null;
+    if (!nextKf) return prevKf.value;
+
+    // Interpolate between keyframes
+    const totalFrames = nextKf.frame - prevKf.frame;
+    const elapsedFrames = frame - prevKf.frame;
+    const rawProgress = elapsedFrames / totalFrames;
+
+    // Apply easing
+    const easingFn = easingFunctions[prevKf.easing || 'linear'];
+    const progress = easingFn(rawProgress);
+
+    // Interpolate based on value type
+    if (typeof prevKf.value === 'number') {
+      return prevKf.value + (nextKf.value - prevKf.value) * progress;
+    } else if (typeof prevKf.value === 'object') {
+      const result = {};
+      for (let key in prevKf.value) {
+        result[key] = prevKf.value[key] + (nextKf.value[key] - prevKf.value[key]) * progress;
+      }
+      return result;
+    }
+
+    return prevKf.value;
+  }, [keyframes, objects]);
+
+  // ===============================================
+  // KEYFRAME MANAGEMENT
+  // ===============================================
+
+  const addKeyframe = useCallback((objectId, property, frame, value, easing = 'linear') => {
+    setKeyframes(prev => {
+      const newKeyframes = { ...prev };
+      if (!newKeyframes[objectId]) {
+        newKeyframes[objectId] = {};
+      }
+      if (!newKeyframes[objectId][property]) {
+        newKeyframes[objectId][property] = [];
+      }
+
+      // Remove existing keyframe at this frame
+      newKeyframes[objectId][property] = newKeyframes[objectId][property].filter(
+        kf => kf.frame !== frame
+      );
+
+      // Add new keyframe
+      newKeyframes[objectId][property].push({ frame, value, easing });
+      newKeyframes[objectId][property].sort((a, b) => a.frame - b.frame);
+
+      return newKeyframes;
+    });
+  }, []);
+
+  const removeKeyframe = useCallback((objectId, property, frame) => {
+    setKeyframes(prev => {
+      const newKeyframes = { ...prev };
+      if (newKeyframes[objectId] && newKeyframes[objectId][property]) {
+        newKeyframes[objectId][property] = newKeyframes[objectId][property].filter(
+          kf => kf.frame !== frame
+        );
+        if (newKeyframes[objectId][property].length === 0) {
+          delete newKeyframes[objectId][property];
+        }
+      }
+      return newKeyframes;
+    });
+  }, []);
+
+  const hasKeyframeAt = useCallback((objectId, property, frame) => {
+    return keyframes[objectId]?.[property]?.some(kf => kf.frame === frame);
+  }, [keyframes]);
+
+  const getKeyframeValue = useCallback((objectId, property, frame) => {
+    const kf = keyframes[objectId]?.[property]?.find(kf => kf.frame === frame);
+    return kf ? kf.value : null;
+  }, [keyframes]);
+
+  // ===============================================
+  // OBJECT MANAGEMENT
+  // ===============================================
+
+  const addObject = useCallback((type, options = {}) => {
+    const canvas = canvasRef.current;
+    const centerX = options.x || canvas.width / 2;
+    const centerY = options.y || canvas.height / 2;
+
+    const newObject = {
+      id: Date.now() + Math.random(),
+      type,
+      name: `${type.charAt(0).toUpperCase() + type.slice(1)} ${objects.length + 1}`,
+      x: centerX,
+      y: centerY,
+      width: options.width || 100,
+      height: options.height || 100,
+      rotation: 0,
+      opacity: 1,
+      fill: options.fill || '#6366f1',
+      stroke: options.stroke || '#000000',
+      strokeWidth: options.strokeWidth || 2,
+      visible: true,
+      locked: false,
+      ...options
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showShapes, showSelectMenu]);
+    setObjects(prev => [...prev, newObject]);
+    setSelectedObjectIds([newObject.id]);
 
+    // Create initial keyframe if auto-keying is on
+    if (autoKeying) {
+      addKeyframe(newObject.id, 'position', currentFrame, { x: centerX, y: centerY });
+      addKeyframe(newObject.id, 'scale', currentFrame, { width: newObject.width, height: newObject.height });
+      addKeyframe(newObject.id, 'rotation', currentFrame, 0);
+      addKeyframe(newObject.id, 'opacity', currentFrame, 1);
+    }
+
+    saveHistory([...objects, newObject]);
+    return newObject;
+  }, [objects, currentFrame, autoKeying]);
+
+  const updateObject = useCallback((objectId, updates) => {
+    setObjects(prev => prev.map(obj => {
+      if (obj.id === objectId) {
+        const updated = { ...obj, ...updates };
+
+        // Auto-keying: create keyframes when properties change
+        if (autoKeying) {
+          if (updates.x !== undefined || updates.y !== undefined) {
+            addKeyframe(objectId, 'position', currentFrame, { x: updated.x, y: updated.y });
+          }
+          if (updates.width !== undefined || updates.height !== undefined) {
+            addKeyframe(objectId, 'scale', currentFrame, { width: updated.width, height: updated.height });
+          }
+          if (updates.rotation !== undefined) {
+            addKeyframe(objectId, 'rotation', currentFrame, updated.rotation);
+          }
+          if (updates.opacity !== undefined) {
+            addKeyframe(objectId, 'opacity', currentFrame, updated.opacity);
+          }
+        }
+
+        return updated;
+      }
+      return obj;
+    }));
+  }, [autoKeying, currentFrame, addKeyframe]);
+
+  const deleteObject = useCallback((objectId) => {
+    setObjects(prev => prev.filter(obj => obj.id !== objectId));
+    setSelectedObjectIds(prev => prev.filter(id => id !== objectId));
+
+    // Remove keyframes
+    setKeyframes(prev => {
+      const newKeyframes = { ...prev };
+      delete newKeyframes[objectId];
+      return newKeyframes;
+    });
+  }, []);
+
+  const duplicateObject = useCallback((objectId) => {
+    const obj = objects.find(o => o.id === objectId);
+    if (obj) {
+      const newObj = {
+        ...obj,
+        id: Date.now() + Math.random(),
+        name: `${obj.name} Copy`,
+        x: obj.x + 20,
+        y: obj.y + 20
+      };
+      setObjects(prev => [...prev, newObj]);
+      setSelectedObjectIds([newObj.id]);
+    }
+  }, [objects]);
+
+  // ===============================================
+  // ANIMATION PRESETS HANDLING
+  // ===============================================
+
+  const handleApplyAnimationPreset = useCallback((keyframesData) => {
+    if (selectedObjectIds.length === 0) return;
+
+    const objectId = selectedObjectIds[0];
+
+    // Apply all keyframes from the preset
+    keyframesData.forEach(({ property, frame, value, easing }) => {
+      addKeyframe(objectId, property, frame, value, easing || 'linear');
+    });
+
+    // Close dialog after applying
+    setShowAnimationPresetsDialog(false);
+  }, [selectedObjectIds, addKeyframe]);
+
+  // ===============================================
+  // SAVE / LOAD PROJECT FUNCTIONS
+  // ===============================================
+
+  // Get user info from localStorage
   useEffect(() => {
-    // Try to get user from localStorage
     const storedUser = localStorage.getItem('user');
     if (storedUser) {
       try {
-        const parsed = JSON.parse(storedUser);
-        if (parsed.email) setUserEmail(parsed.email);
+        const user = JSON.parse(storedUser);
+        setUserEmail(user.email);
+        setUserId(user.id);
       } catch (e) {
-        console.error('Failed to parse user', e);
+        console.error('Error parsing user from localStorage:', e);
       }
-    } else {
-       // Fallback for dev/testing if no auth
-       // setUserEmail('test@example.com'); 
     }
   }, []);
 
-  // Auto-save
+  // Auto-save project instantly after changes (with 2 second debounce)
   useEffect(() => {
-    if (!fileId || !userEmail || strokes.length === 0) return;
+    if (!userEmail || !userId || !dashboardId) return;
 
-    const timer = setTimeout(async () => {
-      setIsSaving(true);
-      try {
-        await fetch(`http://localhost:5000/api/file/${fileId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: strokes })
-        });
-      } catch (err) {
-        console.error('Auto-save failed', err);
-      } finally {
-        setIsSaving(false);
-      }
-    }, 2000); // Debounce 2s
+    // Debounce: Save after 2 seconds of no changes
+    const autoSaveTimeout = setTimeout(() => {
+      saveProject();
+    }, 2000); // Save 2 seconds after last change
 
-    return () => clearTimeout(timer);
-  }, [strokes, fileId, userEmail]);
+    return () => clearTimeout(autoSaveTimeout);
+  }, [userEmail, userId, dashboardId, objects, keyframes, currentFrame, totalFrames, fps, loopEnabled, autoKeying, fileName]);
 
-  const createNewFile = async () => {
-    if (!userEmail || !newFileDetails.name) return;
+  // Load project on mount if dashboardId exists
+  useEffect(() => {
+    if (dashboardId && userEmail && userId) {
+      loadProject(dashboardId);
+    }
+  }, [dashboardId, userEmail, userId]);
+
+  const saveProject = async () => {
+    if (!userEmail || !userId) {
+      alert('Please login to save your project');
+      return;
+    }
+
+    setIsSaving(true);
+
     try {
-      const res = await fetch(`http://localhost:5000/api/user/${userEmail}/file`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: newFileDetails.name,
-          fileType: newFileDetails.type,
-          content: []
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setFileId(data.file._id);
-        setFileName(data.file.fileName);
-        setFileType(data.file.fileType);
-        setStrokes([]);
-        setHistory([]);
-        setHistoryStep(-1);
-        setShowFileModal(false);
-      } else {
-        alert(data.error);
+      const canvas = canvasRef.current;
+      let thumbnail = null;
+
+      // Generate thumbnail from canvas
+      if (canvas) {
+        thumbnail = canvas.toDataURL('image/png');
       }
-    } catch (err) {
-      console.error('Create file failed', err);
-      alert('Failed to create file');
+
+      // Prepare elements data
+      const elements = objects.map(obj => ({
+        id: obj.id,
+        type: obj.type,
+        x: obj.x,
+        y: obj.y,
+        width: obj.width,
+        height: obj.height,
+        rotation: obj.rotation,
+        opacity: obj.opacity,
+        fill: obj.fill,
+        stroke: obj.stroke,
+        strokeWidth: obj.strokeWidth,
+        text: obj.text,
+        fontSize: obj.fontSize,
+        fontFamily: obj.fontFamily,
+        emoji: obj.emoji,
+        visible: obj.visible,
+        locked: obj.locked,
+        name: obj.name,
+        keyframes: keyframes[obj.id] ? Object.keys(keyframes[obj.id]).map(property =>
+          keyframes[obj.id][property].map(kf => ({
+            frame: kf.frame,
+            property: property,
+            value: kf.value
+          }))
+        ).flat() : []
+      }));
+
+      const projectData = {
+        userId,
+        email: userEmail,
+        projectName: fileName,
+        projectId: dashboardId || `project_${Date.now()}`,
+        canvasWidth: canvas?.width || 800,
+        canvasHeight: canvas?.height || 600,
+        backgroundColor: '#ffffff',
+        elements,
+        duration: totalFrames / fps,
+        fps,
+        currentFrame,
+        loop: loopEnabled,
+        autoKey: autoKeying,
+        thumbnail
+      };
+
+      const response = await fetch('http://localhost:5000/api/canvas/project', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(projectData),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        console.log('✅ Project saved successfully:', data.message);
+        // Update URL if this is a new project
+        if (!dashboardId && data.project) {
+          window.history.pushState({}, '', `/animation-tool/${data.project.projectId}`);
+        }
+      } else {
+        console.error('❌ Error saving project:', data.error);
+        alert(`Error saving project: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('❌ Error saving project:', error);
+      alert(`Error saving project: ${error.message}`);
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const shapesList = [
-    { key: 'rectangle', label: 'Rectangle' },
-    { key: 'circle', label: 'Circle' },
-    { key: 'triangle', label: 'Triangle' },
-    { key: 'ellipse', label: 'Ellipse' },
-    { key: 'pentagon', label: 'Pentagon' },
-    { key: 'hexagon', label: 'Hexagon' },
-    { key: 'octagon', label: 'Octagon' },
-    { key: 'rhombus', label: 'Rhombus' },
-    { key: 'parallelogram', label: 'Parallelogram' },
-    { key: 'star', label: 'Star' },
-    { key: 'semicircle', label: 'Semicircle' },
-    { key: 'arrow', label: 'Arrow' }
-  ];
+  const loadProject = async (projectId) => {
+    if (!projectId) return;
 
-  const emojiList = [
-    '😀', '😂', '😍', '😎', '😭', '😡', '👍', '👎', '🎉', '❤️', '🔥', '✨'
-  ];
+    try {
+      const response = await fetch(`http://localhost:5000/api/canvas/project/${projectId}`);
+      const data = await response.json();
 
-  const addEmoji = (emoji, x, y) => {
-    const size = 60;
-    const newShape = {
-      type: 'emoji',
-      text: emoji,
-      x,
-      y,
-      width: size,
-      height: size,
-      rotation: 0,
-      selected: false,
-      hidden: false,
-      layerId: currentLayerId,
-      id: Date.now() + Math.random(),
-      keyframes: [
-        {
-          frame: currentFrame,
+      if (response.ok && data.project) {
+        const project = data.project;
+
+        // Restore project name
+        setFileName(project.projectName);
+
+        // Restore canvas settings
+        const canvas = canvasRef.current;
+        if (canvas) {
+          canvas.width = project.canvasWidth || 800;
+          canvas.height = project.canvasHeight || 600;
+        }
+
+        // Restore objects
+        const loadedObjects = project.elements.map(el => ({
+          id: el.id,
+          type: el.type,
+          x: el.x,
+          y: el.y,
+          width: el.width,
+          height: el.height,
+          rotation: el.rotation,
+          opacity: el.opacity,
+          fill: el.fill,
+          stroke: el.stroke,
+          strokeWidth: el.strokeWidth,
+          text: el.text,
+          fontSize: el.fontSize,
+          fontFamily: el.fontFamily,
+          emoji: el.emoji,
+          visible: el.visible !== undefined ? el.visible : true,
+          locked: el.locked !== undefined ? el.locked : false,
+          name: el.name
+        }));
+
+        setObjects(loadedObjects);
+
+        // Restore keyframes
+        const loadedKeyframes = {};
+        project.elements.forEach(el => {
+          if (el.keyframes && el.keyframes.length > 0) {
+            loadedKeyframes[el.id] = {};
+            el.keyframes.forEach(kf => {
+              if (!loadedKeyframes[el.id][kf.property]) {
+                loadedKeyframes[el.id][kf.property] = [];
+              }
+              loadedKeyframes[el.id][kf.property].push({
+                frame: kf.frame,
+                value: kf.value
+              });
+            });
+          }
+        });
+
+        setKeyframes(loadedKeyframes);
+
+        // Restore animation settings
+        setTotalFrames(Math.round((project.duration || 10) * (project.fps || 30)));
+        setFps(project.fps || 30);
+        setCurrentFrame(project.currentFrame || 0);
+        setLoopEnabled(project.loop !== undefined ? project.loop : true);
+        setAutoKeying(project.autoKey !== undefined ? project.autoKey : false);
+
+        console.log('✅ Project loaded successfully:', project.projectName);
+      } else {
+        console.error('❌ Error loading project:', data.error);
+      }
+    } catch (error) {
+      console.error('❌ Error loading project:', error);
+    }
+  };
+
+  // ===============================================
+  // RENDERING ENGINE
+  // ===============================================
+
+  const renderFrame = useCallback((frame) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Apply canvas offset
+    ctx.save();
+    ctx.translate(canvasOffset.x, canvasOffset.y);
+
+    // Draw each object
+    objects.forEach(obj => {
+      if (!obj.visible) return;
+
+      // Get interpolated values
+      const position = getInterpolatedValue(obj.id, 'position', frame) || { x: obj.x, y: obj.y };
+      const scale = getInterpolatedValue(obj.id, 'scale', frame) || { width: obj.width, height: obj.height };
+      const rotation = getInterpolatedValue(obj.id, 'rotation', frame) ?? obj.rotation;
+      const opacity = getInterpolatedValue(obj.id, 'opacity', frame) ?? obj.opacity;
+
+      ctx.save();
+      ctx.translate(position.x, position.y);
+      ctx.rotate(rotation * Math.PI / 180);
+      ctx.globalAlpha = opacity;
+
+      // Draw based on type
+      if (obj.type === 'rectangle') {
+        ctx.fillStyle = obj.fill;
+        ctx.fillRect(-scale.width / 2, -scale.height / 2, scale.width, scale.height);
+        if (obj.strokeWidth > 0) {
+          ctx.strokeStyle = obj.stroke;
+          ctx.lineWidth = obj.strokeWidth;
+          ctx.strokeRect(-scale.width / 2, -scale.height / 2, scale.width, scale.height);
+        }
+      } else if (obj.type === 'circle') {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, scale.width / 2, scale.height / 2, 0, 0, Math.PI * 2);
+        ctx.fillStyle = obj.fill;
+        ctx.fill();
+        if (obj.strokeWidth > 0) {
+          ctx.strokeStyle = obj.stroke;
+          ctx.lineWidth = obj.strokeWidth;
+          ctx.stroke();
+        }
+      } else if (obj.type === 'emoji') {
+        ctx.font = `${scale.width}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(obj.emoji, 0, 0);
+      } else if (obj.type === 'text') {
+        ctx.font = `${obj.fontSize || 24}px ${obj.fontFamily || 'Arial'}`;
+        ctx.fillStyle = obj.fill;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(obj.text || 'Text', 0, 0);
+      }
+
+      // Draw selection handles if selected
+      if (selectedObjectIds.includes(obj.id) && !isPlaying) {
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(-scale.width / 2, -scale.height / 2, scale.width, scale.height);
+        ctx.setLineDash([]);
+
+        // Draw handles
+        const handleSize = 8;
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#6366f1';
+
+        const handles = [
+          { x: -scale.width / 2, y: -scale.height / 2 }, // Top-left
+          { x: scale.width / 2, y: -scale.height / 2 },  // Top-right
+          { x: scale.width / 2, y: scale.height / 2 },   // Bottom-right
+          { x: -scale.width / 2, y: scale.height / 2 },  // Bottom-left
+        ];
+
+        handles.forEach(handle => {
+          ctx.fillRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize);
+          ctx.strokeRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize);
+        });
+      }
+
+      ctx.restore();
+    });
+
+    ctx.restore();
+  }, [objects, selectedObjectIds, getInterpolatedValue, canvasOffset, isPlaying]);
+
+  // ===============================================
+  // CANVAS INTERACTION
+  // ===============================================
+
+  const getCanvasPoint = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left - canvasOffset.x,
+      y: e.clientY - rect.top - canvasOffset.y
+    };
+  };
+
+  const getObjectAtPoint = (x, y) => {
+    // Check in reverse order (top to bottom)
+    for (let i = objects.length - 1; i >= 0; i--) {
+      const obj = objects[i];
+      if (!obj.visible || obj.locked) continue;
+
+      const position = { x: obj.x, y: obj.y };
+      const scale = { width: obj.width, height: obj.height };
+
+      const halfWidth = scale.width / 2;
+      const halfHeight = scale.height / 2;
+
+      if (x >= position.x - halfWidth && x <= position.x + halfWidth &&
+          y >= position.y - halfHeight && y <= position.y + halfHeight) {
+        return obj;
+      }
+    }
+    return null;
+  };
+
+  const handleCanvasMouseDown = (e) => {
+    const point = getCanvasPoint(e);
+
+    if (selectedTool === 'hand') {
+      setInteractionMode('panning');
+      setDragStart({ x: e.clientX, y: e.clientY, offsetX: canvasOffset.x, offsetY: canvasOffset.y });
+      return;
+    }
+
+    if (selectedTool === 'select') {
+      const clickedObj = getObjectAtPoint(point.x, point.y);
+
+      if (clickedObj) {
+        if (!e.shiftKey) {
+          setSelectedObjectIds([clickedObj.id]);
+        } else {
+          setSelectedObjectIds(prev =>
+            prev.includes(clickedObj.id)
+              ? prev.filter(id => id !== clickedObj.id)
+              : [...prev, clickedObj.id]
+          );
+        }
+
+        setInteractionMode('moving');
+        setDragStart({ x: point.x, y: point.y });
+        setTransformStart(
+          selectedObjectIds.includes(clickedObj.id)
+            ? objects.filter(obj => selectedObjectIds.includes(obj.id)).map(obj => ({
+                id: obj.id,
+                x: obj.x,
+                y: obj.y
+              }))
+            : [{ id: clickedObj.id, x: clickedObj.x, y: clickedObj.y }]
+        );
+      } else {
+        setSelectedObjectIds([]);
+      }
+    }
+
+    if (selectedTool === 'scale') {
+      const clickedObj = getObjectAtPoint(point.x, point.y);
+
+      if (clickedObj) {
+        if (!e.shiftKey) {
+          setSelectedObjectIds([clickedObj.id]);
+        } else {
+          setSelectedObjectIds(prev =>
+            prev.includes(clickedObj.id)
+              ? prev.filter(id => id !== clickedObj.id)
+              : [...prev, clickedObj.id]
+          );
+        }
+
+        setInteractionMode('scaling');
+        setDragStart({ x: point.x, y: point.y });
+        setTransformStart(
+          selectedObjectIds.includes(clickedObj.id)
+            ? objects.filter(obj => selectedObjectIds.includes(obj.id)).map(obj => ({
+                id: obj.id,
+                x: obj.x,
+                y: obj.y,
+                width: obj.width,
+                height: obj.height,
+                fontSize: obj.fontSize,
+                strokeWidth: obj.strokeWidth
+              }))
+            : [{
+                id: clickedObj.id,
+                x: clickedObj.x,
+                y: clickedObj.y,
+                width: clickedObj.width,
+                height: clickedObj.height,
+                fontSize: clickedObj.fontSize,
+                strokeWidth: clickedObj.strokeWidth
+              }]
+        );
+      } else {
+        setSelectedObjectIds([]);
+      }
+    }
+
+    if (selectedTool === 'draw') {
+      // Start drawing artboard
+      setInteractionMode('drawing');
+      setDragStart({ x: point.x, y: point.y });
+    }
+  };
+
+  const handleCanvasMouseMove = (e) => {
+    if (interactionMode === 'panning' && dragStart) {
+      const dx = e.clientX - dragStart.x;
+      const dy = e.clientY - dragStart.y;
+      setCanvasOffset({ x: dragStart.offsetX + dx, y: dragStart.offsetY + dy });
+    } else if (interactionMode === 'moving' && dragStart && transformStart) {
+      const point = getCanvasPoint(e);
+      const dx = point.x - dragStart.x;
+      const dy = point.y - dragStart.y;
+
+      transformStart.forEach(({ id, x, y }) => {
+        updateObject(id, { x: x + dx, y: y + dy });
+      });
+    } else if (interactionMode === 'scaling' && dragStart && transformStart) {
+      const point = getCanvasPoint(e);
+      const dx = point.x - dragStart.x;
+      const dy = point.y - dragStart.y;
+
+      // Calculate scale factor based on distance from center
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const scaleFactor = 1 + (distance / 100);
+
+      transformStart.forEach(({ id, width, height, fontSize, strokeWidth }) => {
+        const updates = {
+          width: width * scaleFactor,
+          height: height * scaleFactor,
+        };
+
+        // Scale text fontSize proportionally
+        if (fontSize) {
+          updates.fontSize = fontSize * scaleFactor;
+        }
+
+        // Scale stroke width proportionally
+        if (strokeWidth) {
+          updates.strokeWidth = strokeWidth * scaleFactor;
+        }
+
+        updateObject(id, updates);
+      });
+    } else if (interactionMode === 'drawing' && dragStart) {
+      // Drawing artboard preview (will be handled in render)
+    }
+  };
+
+  const handleCanvasMouseUp = (e) => {
+    if (interactionMode === 'moving' && transformStart) {
+      saveHistory(objects);
+    }
+
+    if (interactionMode === 'scaling' && transformStart) {
+      saveHistory(objects);
+    }
+
+    if (interactionMode === 'drawing' && dragStart) {
+      // Create artboard/frame
+      const point = getCanvasPoint(e);
+      const width = Math.abs(point.x - dragStart.x);
+      const height = Math.abs(point.y - dragStart.y);
+      const x = Math.min(dragStart.x, point.x) + width / 2;
+      const y = Math.min(dragStart.y, point.y) + height / 2;
+
+      if (width > 10 && height > 10) {
+        addObject('rectangle', {
           x,
           y,
-          width: size,
-          height: size,
-          rotation: 0
+          width,
+          height,
+          fill: 'transparent',
+          stroke: '#6366f1',
+          strokeWidth: 2,
+          name: 'Artboard'
+        });
+      }
+    }
+
+    setInteractionMode('idle');
+    setDragStart(null);
+    setTransformStart(null);
+  };
+
+  const handleCanvasDoubleClick = (e) => {
+    const point = getCanvasPoint(e);
+    const clickedObj = getObjectAtPoint(point.x, point.y);
+
+    if (clickedObj && clickedObj.type === 'text') {
+      // Start editing text
+      setEditingTextId(clickedObj.id);
+      setTextInputValue(clickedObj.text || 'Text');
+
+      // Calculate input position relative to canvas
+      const canvas = canvasRef.current;
+      const rect = canvas.getBoundingClientRect();
+      setTextInputPosition({
+        x: rect.left + clickedObj.x + canvasOffset.x,
+        y: rect.top + clickedObj.y + canvasOffset.y
+      });
+
+      // Focus input after a short delay
+      setTimeout(() => {
+        if (textInputRef.current) {
+          textInputRef.current.focus();
+          textInputRef.current.select();
         }
-      ]
-    };
-    const newStrokes = [...strokes, newShape];
-    saveHistory(newStrokes);
+      }, 50);
+    }
   };
 
-  const handleFileImport = (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height / 2;
-        const size = Math.min(200, img.width || 200, img.height || 200);
-        const newImageStroke = {
-          type: 'image',
-          data: event.target.result,
-          x: centerX,
-          y: centerY,
-          width: size,
-          height: size,
-          rotation: 0,
-          selected: false,
-          hidden: false,
-          layerId: currentLayerId,
-          id: Date.now() + Math.random(),
-          keyframes: [
-            {
-              frame: currentFrame,
-              x: centerX,
-              y: centerY,
-              width: size,
-              height: size,
-              rotation: 0
+  const handleTextInputChange = (e) => {
+    setTextInputValue(e.target.value);
+  };
+
+  const handleTextInputBlur = () => {
+    if (editingTextId) {
+      updateObject(editingTextId, { text: textInputValue });
+      setEditingTextId(null);
+      setTextInputValue('');
+    }
+  };
+
+  const handleTextInputKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleTextInputBlur();
+    } else if (e.key === 'Escape') {
+      setEditingTextId(null);
+      setTextInputValue('');
+    }
+  };
+
+  // ===============================================
+  // PLAYBACK CONTROLS
+  // ===============================================
+
+  useEffect(() => {
+    if (isPlaying) {
+      const animate = (timestamp) => {
+        if (previousTimeRef.current !== undefined) {
+          const deltaTime = timestamp - previousTimeRef.current;
+          const frameIncrement = (deltaTime / 1000) * fps;
+
+          setCurrentFrame(prev => {
+            const next = prev + frameIncrement;
+            if (next >= totalFrames) {
+              if (loopEnabled) {
+                return 0;
+              } else {
+                setIsPlaying(false);
+                return totalFrames;
+              }
             }
-          ]
-        };
-        const newStrokes = [...strokes, newImageStroke];
-        saveHistory(newStrokes);
-        imageCacheRef.current[newImageStroke.id] = img;
-        renderCanvas();
-      };
-      img.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
-  };
+            return next;
+          });
+        }
 
-  const saveHistory = (newStrokes) => {
-    const deepCopiedStrokes = JSON.parse(JSON.stringify(newStrokes));
-    let newHistory = history.slice(0, historyStep + 1);
-    newHistory.push(deepCopiedStrokes);
-    if (newHistory.length > 20) {
+        previousTimeRef.current = timestamp;
+        requestRef.current = requestAnimationFrame(animate);
+      };
+
+      requestRef.current = requestAnimationFrame(animate);
+
+      return () => {
+        if (requestRef.current) {
+          cancelAnimationFrame(requestRef.current);
+        }
+        previousTimeRef.current = undefined;
+      };
+    } else {
+      previousTimeRef.current = undefined;
+    }
+  }, [isPlaying, fps, totalFrames, loopEnabled]);
+
+  // Render current frame
+  useEffect(() => {
+    renderFrame(currentFrame);
+  }, [currentFrame, renderFrame]);
+
+  // ===============================================
+  // HISTORY MANAGEMENT
+  // ===============================================
+
+  const saveHistory = useCallback((newObjects) => {
+    const newHistory = history.slice(0, historyStep + 1);
+    newHistory.push(JSON.parse(JSON.stringify(newObjects)));
+    if (newHistory.length > 50) {
       newHistory.shift();
     }
     setHistory(newHistory);
     setHistoryStep(newHistory.length - 1);
-    setStrokes(newStrokes);
-  };
+  }, [history, historyStep]);
 
-  const undo = () => {
+  const undo = useCallback(() => {
     if (historyStep > 0) {
-      const prevStrokes = history[historyStep - 1];
-      setStrokes(JSON.parse(JSON.stringify(prevStrokes)));
+      setObjects(JSON.parse(JSON.stringify(history[historyStep - 1])));
       setHistoryStep(historyStep - 1);
-    } else if (historyStep === 0) {
-      setStrokes([]);
-      setHistoryStep(-1);
     }
-  };
+  }, [history, historyStep]);
 
-  const redo = () => {
+  const redo = useCallback(() => {
     if (historyStep < history.length - 1) {
-      const nextStrokes = history[historyStep + 1];
-      setStrokes(JSON.parse(JSON.stringify(nextStrokes)));
+      setObjects(JSON.parse(JSON.stringify(history[historyStep + 1])));
       setHistoryStep(historyStep + 1);
     }
-  };
+  }, [history, historyStep]);
 
-  // Keyboard Shortcuts
+  // ===============================================
+  // KEYBOARD SHORTCUTS
+  // ===============================================
+
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Ignore inputs
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+
+      // Playback
+      if (e.key === ' ') {
+        e.preventDefault();
+        setIsPlaying(prev => !prev);
+      }
+
+      // Frame navigation
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setCurrentFrame(prev => Math.max(0, prev - 1));
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setCurrentFrame(prev => Math.min(totalFrames, prev + 1));
+      }
+      if (e.key === 'Home') {
+        e.preventDefault();
+        setCurrentFrame(0);
+      }
+      if (e.key === 'End') {
+        e.preventDefault();
+        setCurrentFrame(totalFrames);
+      }
+
+      // Tools
+      if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        setSelectedTool('select');
+      }
+      if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault();
+        setSelectedTool('hand');
+      }
+      if (e.key === 'k' || e.key === 'K') {
+        // Check if no object is selected - if so, activate scale tool
+        if (selectedObjectIds.length === 0) {
+          e.preventDefault();
+          setSelectedTool('scale');
+          return;
+        }
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        setSelectedTool('draw');
+      }
+
+      // Keyframes (only when objects are selected)
+      if ((e.key === 'k' || e.key === 'K') && selectedObjectIds.length > 0) {
+        e.preventDefault();
+        selectedObjectIds.forEach(id => {
+          const obj = objects.find(o => o.id === id);
+          if (obj) {
+            addKeyframe(id, 'position', Math.round(currentFrame), { x: obj.x, y: obj.y });
+            addKeyframe(id, 'scale', Math.round(currentFrame), { width: obj.width, height: obj.height });
+            addKeyframe(id, 'rotation', Math.round(currentFrame), obj.rotation);
+            addKeyframe(id, 'opacity', Math.round(currentFrame), obj.opacity);
+          }
+        });
+      }
+
+      // Delete
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        selectedObjectIds.forEach(id => deleteObject(id));
+        saveHistory(objects);
+      }
 
       // Undo/Redo
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         if (e.shiftKey) {
           redo();
         } else {
           undo();
         }
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
         e.preventDefault();
         redo();
-      } 
-      // Delete Object
-      else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (e.key === 'Backspace') e.preventDefault(); // Prevent back nav
-        
-        const selected = strokes.filter(s => s.selected);
-        if (selected.length > 0) {
-           const newStrokes = strokes.filter(s => !s.selected);
-           saveHistory(newStrokes);
-        }
       }
-      // Insert Keyframe (I)
-      else if (e.key.toLowerCase() === 'i') {
-         const selected = strokes.filter(s => s.selected);
-         if (selected.length > 0) {
-            selected.forEach(s => {
-               updateKeyframe(s.id, { x: s.x, y: s.y, width: s.width, height: s.height, rotation: s.rotation });
-            });
-         }
-      }
-      // Select All (Ctrl+A)
-      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-         e.preventDefault();
-         setStrokes(prev => prev.map(s => ({ ...s, selected: true })));
-      }
-      // Toggle Playback (Space)
-      else if (e.key === ' ') {
-         e.preventDefault();
-         setIsPlaying(prev => !prev);
-      }
-      // Tool shortcuts
-      else if (e.key.toLowerCase() === 'v') {
-         setSelectedTool('select');
-      } else if (e.key.toLowerCase() === 'k') {
-         setSelectedTool('scale');
-      } else if (e.key.toLowerCase() === 'h') {
-         setSelectedTool('hand');
+
+      // Duplicate
+      if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+        e.preventDefault();
+        selectedObjectIds.forEach(id => duplicateObject(id));
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [strokes, history, historyStep, isPlaying]);
+  }, [selectedObjectIds, objects, currentFrame, totalFrames, isPlaying, addKeyframe, deleteObject, undo, redo, duplicateObject, saveHistory]);
 
-  const handleAnimateToggle = (checked) => {
-    setAnimateEnabled(checked);
+  // ===============================================
+  // TOOL POPUP CLICK OUTSIDE HANDLER
+  // ===============================================
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showToolPopup && toolPopupRef.current && !toolPopupRef.current.contains(e.target)) {
+        setShowToolPopup(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showToolPopup]);
+
+  // ===============================================
+  // UI HELPER FUNCTIONS
+  // ===============================================
+
+  const formatTime = (frame) => {
+    const seconds = frame / fps;
+    const mins = Math.floor(seconds / 60);
+    const secs = (seconds % 60).toFixed(2);
+    return `${mins}:${secs.padStart(5, '0')}`;
   };
-  const handleToolClick = (tool) => {
+
+  const selectedObject = selectedObjectIds.length === 1 ? objects.find(o => o.id === selectedObjectIds[0]) : null;
+
+  const handleToolSelection = (tool) => {
     setSelectedTool(tool);
-    if (tool === 'rectangle') setShowShapes((v) => !v);
-  };
-  const getPos = (canvas, event) => {
-    const rect = canvas.getBoundingClientRect();
-    return { x: event.clientX - rect.left - canvasOffset.x, y: event.clientY - rect.top - canvasOffset.y };
-  };
-  const drawShapePath = (ctx, type, x, y, w, h) => {
-    const rx = w / 2;
-    const ry = h / 2;
-    if (type === 'rectangle') {
-      ctx.rect(x - rx, y - ry, w, h);
-    } else if (type === 'circle') {
-      ctx.ellipse(x, y, rx, rx, 0, 0, Math.PI * 2);
-    } else if (type === 'triangle') {
-      ctx.moveTo(x, y - ry);
-      ctx.lineTo(x - rx, y + ry);
-      ctx.lineTo(x + rx, y + ry);
-      ctx.closePath();
-    } else if (type === 'ellipse') {
-      ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-    } else if (type === 'pentagon') {
-      const points = [];
-      const r = Math.min(rx, ry);
-      for (let i = 0; i < 5; i++) {
-        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
-        points.push({ x: x + rx * Math.cos(ang), y: y + ry * Math.sin(ang) });
-      }
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-      ctx.closePath();
-    } else if (type === 'hexagon') {
-      const points = [];
-      for (let i = 0; i < 6; i++) {
-        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / 6;
-        points.push({ x: x + rx * Math.cos(ang), y: y + ry * Math.sin(ang) });
-      }
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-      ctx.closePath();
-    } else if (type === 'octagon') {
-      const points = [];
-      for (let i = 0; i < 8; i++) {
-        const ang = -Math.PI / 8 + (i * 2 * Math.PI) / 8;
-        points.push({ x: x + rx * Math.cos(ang), y: y + ry * Math.sin(ang) });
-      }
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-      ctx.closePath();
-    } else if (type === 'rhombus') {
-      ctx.moveTo(x, y - ry);
-      ctx.lineTo(x + rx, y);
-      ctx.lineTo(x, y + ry);
-      ctx.lineTo(x - rx, y);
-      ctx.closePath();
-    } else if (type === 'parallelogram') {
-      const skew = w * 0.25;
-      ctx.moveTo(x - rx + skew, y - ry);
-      ctx.lineTo(x + rx + skew, y - ry);
-      ctx.lineTo(x + rx - skew, y + ry);
-      ctx.lineTo(x - rx - skew, y + ry);
-      ctx.closePath();
-    } else if (type === 'star') {
-      const outerX = rx;
-      const outerY = ry;
-      const innerX = rx * 0.45;
-      const innerY = ry * 0.45;
-      const points = [];
-      for (let i = 0; i < 10; i++) {
-        const ang = -Math.PI / 2 + (i * Math.PI) / 5;
-        const radX = i % 2 === 0 ? outerX : innerX;
-        const radY = i % 2 === 0 ? outerY : innerY;
-        points.push({ x: x + radX * Math.cos(ang), y: y + radY * Math.sin(ang) });
-      }
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-      ctx.closePath();
-    } else if (type === 'semicircle') {
-      ctx.arc(x, y, rx, 0, Math.PI, false);
-      ctx.closePath();
-    } else if (type === 'arrow') {
-      const sh = h * 0.4;
-      ctx.moveTo(x - rx, y - sh / 2);
-      ctx.lineTo(x, y - sh / 2);
-      ctx.lineTo(x, y - ry);
-      ctx.lineTo(x + rx, y);
-      ctx.lineTo(x, y + ry);
-      ctx.lineTo(x, y + sh / 2);
-      ctx.lineTo(x - rx, y + sh / 2);
-      ctx.closePath();
-    }
+    setShowToolPopup(false);
   };
 
-  const addShape = (type, x, y) => {
-    const size = 100;
-    const newShape = {
-      type: 'shape',
-      shape: type,
-      x,
-      y,
-      width: size,
-      height: size,
-      rotation: 0,
-      selected: false,
-      hidden: false,
-      layerId: currentLayerId,
-      id: Date.now() + Math.random(),
-      keyframes: [
-        {
-          frame: currentFrame,
-          x,
-          y,
-          width: size,
-          height: size,
-          rotation: 0
-        }
-      ]
-    };
-    const newStrokes = [...strokes, newShape];
-    saveHistory(newStrokes);
-  };
-
-  // --- Animation & Keyframe Logic ---
-
-  const interpolateValue = (val1, val2, t) => {
-    return val1 + (val2 - val1) * t;
-  };
-
-  const getInterpolatedState = (stroke, frame) => {
-    if (!stroke.keyframes || stroke.keyframes.length === 0) return stroke;
-
-    const sortedKeys = [...stroke.keyframes].sort((a, b) => a.frame - b.frame);
-    
-    // Before first keyframe
-    if (frame <= sortedKeys[0].frame) {
-      const k = sortedKeys[0];
-      return { ...stroke, x: k.x, y: k.y, width: k.width, height: k.height, rotation: k.rotation };
-    }
-
-    // After last keyframe
-    if (frame >= sortedKeys[sortedKeys.length - 1].frame) {
-      const k = sortedKeys[sortedKeys.length - 1];
-      return { ...stroke, x: k.x, y: k.y, width: k.width, height: k.height, rotation: k.rotation };
-    }
-
-    // Between keyframes
-    for (let i = 0; i < sortedKeys.length - 1; i++) {
-      const k1 = sortedKeys[i];
-      const k2 = sortedKeys[i + 1];
-      if (frame >= k1.frame && frame < k2.frame) {
-        const t = (frame - k1.frame) / (k2.frame - k1.frame);
-        // Add easing logic here later
-        return {
-          ...stroke,
-          x: interpolateValue(k1.x, k2.x, t),
-          y: interpolateValue(k1.y, k2.y, t),
-          width: interpolateValue(k1.width, k2.width, t),
-          height: interpolateValue(k1.height, k2.height, t),
-          rotation: interpolateValue(k1.rotation, k2.rotation, t)
-        };
-      }
-    }
-    return stroke;
-  };
-
-  const updateCanvasForFrame = (frame) => {
-    // Only update properties that are animated, keep selection state etc.
-    // But here we need to update state to trigger re-render
-    // WARNING: Calling setStrokes in a loop or high frequency needs care.
-    // Ideally we'd use a ref for render loop, but for React state we need to commit eventually.
-    // For playback, we can update state.
-    
-    setStrokes(prevStrokes => {
-      return prevStrokes.map(s => {
-        if (s.type === 'shape' || s.type === 'emoji' || s.type === 'image') {
-           return getInterpolatedState(s, frame);
-        }
-        return s;
-      });
-    });
-  };
-
-  const animate = (time) => {
-    if (previousTimeRef.current !== undefined) {
-      const deltaTime = time - previousTimeRef.current;
-      // Calculate frames to advance
-      // const framesToAdvance = (deltaTime / 1000) * fps; 
-      // Simple approach: check if enough time passed for 1 frame
-      
-      const msPerFrame = 1000 / fps;
-      if (deltaTime >= msPerFrame) {
-         setCurrentFrame(prev => {
-           const next = prev + 1;
-           if (next > totalFrames) return 0; // Loop
-           return next;
-         });
-         previousTimeRef.current = time;
-      }
-    } else {
-      previousTimeRef.current = time;
-    }
-    if (isPlaying) {
-       requestRef.current = requestAnimationFrame(animate);
-    }
-  };
-
-  useEffect(() => {
-    if (isPlaying) {
-      requestRef.current = requestAnimationFrame(animate);
-    } else {
-      cancelAnimationFrame(requestRef.current);
-      previousTimeRef.current = undefined;
-    }
-    return () => cancelAnimationFrame(requestRef.current);
-  }, [isPlaying, fps, totalFrames]);
-
-  useEffect(() => {
-    // Sync canvas when frame changes
-    updateCanvasForFrame(currentFrame);
-  }, [currentFrame]);
-
-  const togglePlay = () => setIsPlaying(!isPlaying);
-
-  const updateKeyframe = (strokeId, newProps) => {
-    setStrokes(prev => prev.map(s => {
-      if (s.id === strokeId && (s.type === 'shape' || s.type === 'emoji' || s.type === 'image')) {
-        const newKeys = s.keyframes ? [...s.keyframes] : [];
-        const existingIndex = newKeys.findIndex(k => k.frame === currentFrame);
-        
-        const keyData = {
-          frame: currentFrame,
-          x: newProps.x !== undefined ? newProps.x : s.x,
-          y: newProps.y !== undefined ? newProps.y : s.y,
-          width: newProps.width !== undefined ? newProps.width : s.width,
-          height: newProps.height !== undefined ? newProps.height : s.height,
-          rotation: newProps.rotation !== undefined ? newProps.rotation : s.rotation
-        };
-
-        if (existingIndex !== -1) {
-          newKeys[existingIndex] = { ...newKeys[existingIndex], ...keyData };
-        } else {
-          newKeys.push(keyData);
-          newKeys.sort((a, b) => a.frame - b.frame);
-        }
-        return { ...s, keyframes: newKeys };
-      }
-      return s;
-    }));
-  };
-
-  const handleTimelineScrub = (e) => {
-     const rect = timelineScrollRef.current.getBoundingClientRect();
-     const x = e.clientX - rect.left + timelineScrollRef.current.scrollLeft;
-     // 10px per frame at scale 1? Let's define pixels per frame
-     const pixelsPerFrame = 10 * timelineScale;
-     const frame = Math.max(0, Math.min(totalFrames, Math.floor(x / pixelsPerFrame)));
-     setCurrentFrame(frame);
-  };
-
-  // --- End Animation Logic ---
-
-  const rotatePoint = (x, y, cx, cy, angle) => {
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-    const nx = (cos * (x - cx)) + (sin * (y - cy)) + cx;
-    const ny = (cos * (y - cy)) - (sin * (x - cx)) + cy;
-    return { x: nx, y: ny };
-  };
-
-  const getHandleCoords = (s) => {
-    const { x, y, width, height, rotation } = s;
-    const w2 = width / 2;
-    const h2 = height / 2;
-    // Unrotated coords
-    const coords = {
-      tl: { x: x - w2, y: y - h2 },
-      t: { x: x, y: y - h2 },
-      tr: { x: x + w2, y: y - h2 },
-      r: { x: x + w2, y: y },
-      br: { x: x + w2, y: y + h2 },
-      b: { x: x, y: y + h2 },
-      bl: { x: x - w2, y: y + h2 },
-      l: { x: x - w2, y: y },
-      rot: { x: x, y: y - h2 - 20 }
-    };
-    // Rotate all
-    Object.keys(coords).forEach(k => {
-      coords[k] = rotatePoint(coords[k].x, coords[k].y, x, y, rotation);
-    });
-    return coords;
-  };
-
-  const drawStroke = (ctx, s) => {
-    ctx.save();
-    if (s.type === 'shape') {
-      ctx.translate(s.x, s.y);
-      ctx.rotate(s.rotation);
-      ctx.translate(-s.x, -s.y);
-      ctx.strokeStyle = '#1c1b25';
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      drawShapePath(ctx, s.shape, s.x, s.y, s.width, s.height);
-      ctx.stroke();
-    } else if (s.type === 'emoji') {
-      ctx.translate(s.x, s.y);
-      ctx.rotate(s.rotation);
-      ctx.translate(-s.x, -s.y);
-      ctx.font = `${s.width}px serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(s.text || s.emoji, s.x, s.y);
-    } else if (s.type === 'image') {
-      ctx.translate(s.x, s.y);
-      ctx.rotate(s.rotation);
-      ctx.translate(-s.x, -s.y);
-      let img = imageCacheRef.current[s.id];
-      if (!img) {
-        img = new Image();
-        img.src = s.data;
-        imageCacheRef.current[s.id] = img;
-      }
-      if (img) {
-        ctx.drawImage(img, s.x - s.width / 2, s.y - s.height / 2, s.width, s.height);
-      }
-    } else {
-      // Freehand
-      ctx.strokeStyle = s.selected ? '#7270ff' : '#1c1b25';
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      if (s.points && s.points.length) {
-        ctx.moveTo(s.points[0].x, s.points[0].y);
-        for (let i = 1; i < s.points.length; i++) {
-          ctx.lineTo(s.points[i].x, s.points[i].y);
-        }
-      }
-      ctx.stroke();
-    }
-    ctx.restore();
-  };
-
-  const renderCanvas = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.translate(canvasOffset.x, canvasOffset.y);
-
-    // Onion Skin
-    if (onionSkin && currentFrame > 0) {
-      const skinFrame = Math.max(0, currentFrame - 3);
-      strokes.forEach((s) => {
-        const skinState = getInterpolatedState(s, skinFrame);
-        ctx.save();
-        ctx.globalAlpha = 0.2; // Faint ghost
-        // Draw ghost without selection color/highlight
-        drawStroke(ctx, { ...skinState, selected: false });
-        ctx.restore();
-      });
-    }
-
-    strokes.forEach((s) => {
-      const layer = layers.find(l => l.id === (s.layerId || 'layer-1'));
-      if (s.hidden || (layer && !layer.visible)) return;
-      drawStroke(ctx, s);
-
-      // Selection UI
-      if (s.selected && selectedTool === 'select') {
-        const handles = getHandleCoords(s);
-        
-        ctx.save();
-        ctx.translate(s.x, s.y);
-        ctx.rotate(s.rotation);
-        ctx.translate(-s.x, -s.y);
-        
-        // Bounding box
-        ctx.strokeStyle = '#388bff';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(s.x - s.width/2, s.y - s.height/2, s.width, s.height);
-        
-        // Rotate handle line
-        ctx.beginPath();
-        ctx.moveTo(s.x, s.y - s.height/2);
-        ctx.lineTo(s.x, s.y - s.height/2 - 20);
-        ctx.stroke();
-        ctx.restore();
-
-        // Draw handles (unrotated circles at rotated positions)
-        Object.entries(handles).forEach(([key, pos]) => {
-          ctx.beginPath();
-          ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2);
-          ctx.fillStyle = '#ffffff';
-          ctx.fill();
-          ctx.strokeStyle = '#388bff';
-          ctx.lineWidth = 1;
-          ctx.stroke();
-        });
-      }
-    });
-
-    if (currentStroke && currentStroke.points.length) {
-      ctx.strokeStyle = '#1c1b25';
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(currentStroke.points[0].x, currentStroke.points[0].y);
-      for (let i = 1; i < currentStroke.points.length; i++) {
-        ctx.lineTo(currentStroke.points[i].x, currentStroke.points[i].y);
-      }
-      ctx.stroke();
-    }
-
-    if (selectionStart && selectionEnd) {
-      const x = Math.min(selectionStart.x, selectionEnd.x);
-      const y = Math.min(selectionStart.y, selectionEnd.y);
-      const w = Math.abs(selectionEnd.x - selectionStart.x);
-      const h = Math.abs(selectionEnd.y - selectionStart.y);
-      ctx.strokeStyle = '#388bff';
-      ctx.fillStyle = 'rgba(56,139,255,0.12)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.rect(x, y, w, h);
-      ctx.fill();
-      ctx.stroke();
-    }
-    ctx.restore();
-  };
-
-  const hitTest = (x, y) => {
-    // Check handles of selected items first
-    for (let i = strokes.length - 1; i >= 0; i--) {
-      const s = strokes[i];
-      if (s.selected && (s.type === 'shape' || s.type === 'emoji' || s.type === 'image')) {
-        const handles = getHandleCoords(s);
-        for (const [key, pos] of Object.entries(handles)) {
-          if (Math.hypot(pos.x - x, pos.y - y) <= 6) {
-            return { index: i, type: 'handle', handle: key };
-          }
-        }
-      }
-    }
-
-    // Check bodies
-    for (let i = strokes.length - 1; i >= 0; i--) {
-      const s = strokes[i];
-      if (s.type === 'shape' || s.type === 'emoji' || s.type === 'image') {
-        // Rotate point back
-        const p = rotatePoint(x, y, s.x, s.y, -s.rotation);
-        if (Math.abs(p.x - s.x) <= s.width / 2 && Math.abs(p.y - s.y) <= s.height / 2) {
-          return { index: i, type: 'body' };
-        }
-      } else if (s.bbox) {
-        // Simple bbox check for freehand
-        if (x >= s.bbox.x1 && x <= s.bbox.x2 && y >= s.bbox.y1 && y <= s.bbox.y2) {
-          return { index: i, type: 'body' };
-        }
-      }
-    }
-    return null;
-  };
-
-  const startDrawing = (e) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const pos = getPos(canvas, e);
-    const rect = canvas.getBoundingClientRect();
-    const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-
-    if (selectedTool === 'hand') {
-      panStartRef.current = { mouse: rawPos, offset: { ...canvasOffset } };
-      setIsDrawing(true);
-      renderCanvas();
-      return;
-    }
-
-    if (selectedTool === 'scale') {
-      const selectedIndices = strokes.map((st, i) => st.selected ? i : -1).filter(i => i !== -1);
-      if (selectedIndices.length > 0) {
-        setInteractionMode('resizing');
-        setActiveHandle('br');
-        setTransformStart({
-          mouse: pos,
-          elements: selectedIndices.map(i => JSON.parse(JSON.stringify(strokes[i])))
-        });
-        renderCanvas();
-        return;
-      }
-    }
-
-    if (selectedTool === 'select') {
-      const hit = hitTest(pos.x, pos.y);
-      
-      if (hit) {
-        const isMulti = e.shiftKey;
-        const s = strokes[hit.index];
-        
-        // Update selection
-        let newStrokes = [...strokes];
-        if (!s.selected && !isMulti) {
-          newStrokes = newStrokes.map(st => ({ ...st, selected: false }));
-          newStrokes[hit.index].selected = true;
-          setStrokes(newStrokes); // Don't save history for simple select click yet?
-        } else if (isMulti) {
-          newStrokes[hit.index].selected = !newStrokes[hit.index].selected;
-          setStrokes(newStrokes);
-        } else if (!s.selected) {
-           newStrokes = newStrokes.map(st => ({ ...st, selected: false }));
-           newStrokes[hit.index].selected = true;
-           setStrokes(newStrokes);
-        }
-        
-        if (hit.type === 'handle') {
-          setInteractionMode(hit.handle === 'rot' ? 'rotating' : 'resizing');
-          setActiveHandle(hit.handle);
-        } else {
-          setInteractionMode('moving');
-        }
-        
-        // Prepare transform start
-        const selectedIndices = newStrokes.map((st, i) => st.selected ? i : -1).filter(i => i !== -1);
-        setTransformStart({
-          mouse: pos,
-          elements: selectedIndices.map(i => JSON.parse(JSON.stringify(newStrokes[i])))
-        });
-        
-      } else {
-        // Clicked on empty space
-        if (!e.shiftKey) {
-           setStrokes(strokes.map(s => ({ ...s, selected: false })));
-        }
-        setSelectionStart(pos);
-        setSelectionEnd(pos);
-        setInteractionMode('selecting');
-      }
-      renderCanvas();
-      return;
-    }
-
-    setIsDrawing(true);
-    setCurrentStroke({ points: [pos] });
-    renderCanvas();
-  };
-
-  const draw = (e) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const pos = getPos(canvas, e);
-    const rect = canvas.getBoundingClientRect();
-    const rawPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-
-    if (selectedTool === 'hand') {
-      if (!panStartRef.current) return;
-      const dx = rawPos.x - panStartRef.current.mouse.x;
-      const dy = rawPos.y - panStartRef.current.mouse.y;
-      setCanvasOffset({ x: panStartRef.current.offset.x + dx, y: panStartRef.current.offset.y + dy });
-      renderCanvas();
-      return;
-    }
-
-    if (selectedTool === 'select' || selectedTool === 'scale') {
-      if (interactionMode === 'selecting') {
-        if (!selectionStart) return;
-        setSelectionEnd(pos);
-        renderCanvas();
-      } else if (interactionMode === 'moving' && transformStart) {
-        const dx = pos.x - transformStart.mouse.x;
-        const dy = pos.y - transformStart.mouse.y;
-        
-        const newStrokes = [...strokes];
-        transformStart.elements.forEach((startEl, i) => {
-          // Find current index (assuming order hasn't changed, which it shouldn't)
-          const index = strokes.findIndex(s => s.id === startEl.id); // Need ID! Added ID in addShape
-          if (index !== -1) {
-            if (newStrokes[index].type === 'shape' || newStrokes[index].type === 'emoji' || newStrokes[index].type === 'image') {
-              newStrokes[index].x = startEl.x + dx;
-              newStrokes[index].y = startEl.y + dy;
-            } else {
-              // Freehand move
-              const movePts = startEl.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
-              newStrokes[index].points = movePts;
-              // Update bbox
-              const xs = movePts.map(p => p.x);
-              const ys = movePts.map(p => p.y);
-              newStrokes[index].bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
-            }
-          }
-        });
-        setStrokes(newStrokes);
-        renderCanvas();
-      } else if (interactionMode === 'rotating' && transformStart) {
-        // Rotate logic
-        const newStrokes = [...strokes];
-        transformStart.elements.forEach((startEl) => {
-          const index = strokes.findIndex(s => s.id === startEl.id);
-          if (index !== -1 && (newStrokes[index].type === 'shape' || newStrokes[index].type === 'emoji' || newStrokes[index].type === 'image')) {
-             // Angle from center to mouse
-             const angle = Math.atan2(pos.y - startEl.y, pos.x - startEl.x);
-             const startAngle = Math.atan2(transformStart.mouse.y - startEl.y, transformStart.mouse.x - startEl.x);
-             newStrokes[index].rotation = startEl.rotation + (angle - startAngle);
-          }
-        });
-        setStrokes(newStrokes);
-        renderCanvas();
-      } else if (interactionMode === 'resizing' && transformStart) {
-        const newStrokes = [...strokes];
-        transformStart.elements.forEach((startEl) => {
-          const index = strokes.findIndex(s => s.id === startEl.id);
-          if (index !== -1 && (newStrokes[index].type === 'shape' || newStrokes[index].type === 'emoji' || newStrokes[index].type === 'image')) {
-             const el = newStrokes[index];
-             
-             // Rotate mouse pos back to axis aligned space relative to center
-             const p = rotatePoint(pos.x, pos.y, startEl.x, startEl.y, -startEl.rotation);
-             const startP = rotatePoint(transformStart.mouse.x, transformStart.mouse.y, startEl.x, startEl.y, -startEl.rotation);
-             const dx = p.x - startP.x;
-             const dy = p.y - startP.y;
-
-             // Proportional scaling for corners
-             const isCorner = ['tl', 'tr', 'bl', 'br'].includes(activeHandle);
-             const aspectRatio = startEl.width / startEl.height;
-             
-             let newW = startEl.width;
-             let newH = startEl.height;
-             
-             if (activeHandle === 'r') newW += dx;
-             if (activeHandle === 'l') newW -= dx;
-             if (activeHandle === 'b') newH += dy;
-             if (activeHandle === 't') newH -= dy;
-             
-             if (isCorner) {
-                // Simple symmetric scaling from center for now or corner based?
-                // Canva scales from opposite corner. 
-                // Implementing center-based scaling is easier, but corner-based is expected.
-                // Let's do simple center-based scaling for MVP or it gets complex with rotation.
-                // Center-based: dragging corner expands shape in all directions relative to center.
-                // If I want opposite corner fixed, I need to move center too.
-                
-                // Let's try simple width/height adjustment first.
-                if (activeHandle === 'br') { newW += dx; newH = newW / aspectRatio; }
-                if (activeHandle === 'bl') { newW -= dx; newH = newW / aspectRatio; }
-                if (activeHandle === 'tr') { newW += dx; newH = newW / aspectRatio; }
-                if (activeHandle === 'tl') { newW -= dx; newH = newW / aspectRatio; }
-             }
-             
-             el.width = Math.max(10, newW);
-             el.height = Math.max(10, newH);
-          }
-        });
-        setStrokes(newStrokes);
-        renderCanvas();
-      }
-      return;
-    }
-
-    if (!isDrawing || !currentStroke) return;
-    setCurrentStroke((prev) => {
-      const next = { ...prev, points: [...prev.points, pos] };
-      return next;
-    });
-    renderCanvas();
-  };
-
-  const endDrawing = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    if (selectedTool === 'hand') {
-      panStartRef.current = null;
-      setIsDrawing(false);
-      renderCanvas();
-      return;
-    }
-
-    if (selectedTool === 'select' || selectedTool === 'scale') {
-      if (interactionMode === 'selecting') {
-        if (selectionStart && selectionEnd) {
-          const rx1 = Math.min(selectionStart.x, selectionEnd.x);
-          const ry1 = Math.min(selectionStart.y, selectionEnd.y);
-          const rx2 = Math.max(selectionStart.x, selectionEnd.x);
-            const ry2 = Math.max(selectionStart.y, selectionEnd.y);
-            const intersects = (bbox) => !(bbox.x2 < rx1 || bbox.x1 > rx2 || bbox.y2 < ry1 || bbox.y1 > ry2);
-            const nextStrokes = strokes.map((s) => {
-               let bbox = s.bbox;
-               if (s.type === 'shape' || s.type === 'emoji' || s.type === 'image') {
-                  bbox = { x1: s.x - s.width/2, y1: s.y - s.height/2, x2: s.x + s.width/2, y2: s.y + s.height/2 };
-               }
-               if (!bbox) return { ...s, selected: false };
-               return { ...s, selected: intersects(bbox) };
-            });
-          setStrokes(nextStrokes);
-        }
-        setSelectionStart(null);
-        setSelectionEnd(null);
-      } else if (interactionMode !== 'idle') {
-        // Finished moving/resizing/rotating
-        if (transformStart) {
-           // Auto-Keying Check
-           if (autoKeying) {
-             const selected = strokes.filter(s => s.selected);
-             selected.forEach(s => {
-               updateKeyframe(s.id, { x: s.x, y: s.y, width: s.width, height: s.height, rotation: s.rotation });
-             });
-           }
-          saveHistory(strokes); // Save state
-        }
-      }
-      setInteractionMode('idle');
-      setTransformStart(null);
-      renderCanvas();
-      return;
-    }
-
-    if (isDrawing && currentStroke) {
-      const pts = currentStroke.points;
-      const xs = pts.map((p) => p.x);
-      const ys = pts.map((p) => p.y);
-      const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
-      // Add ID to freehand strokes too
-      const newStroke = { 
-        type: 'freehand', 
-        points: pts, 
-        bbox, 
-        selected: false,
-        hidden: false,
-        layerId: currentLayerId,
-        id: Date.now() + Math.random() 
-      };
-      const newStrokes = [...strokes, newStroke];
-      saveHistory(newStrokes);
-      setCurrentStroke(null);
-      setIsDrawing(false);
-      renderCanvas();
-    } else {
-      setIsDrawing(false);
-    }
-  };
-  const handleCanvasDrop = (e) => {
-    e.preventDefault();
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const pos = getPos(canvas, e);
-    const type = e.dataTransfer.getData('shape');
-    const emoji = e.dataTransfer.getData('emoji');
-    if (type) addShape(type, pos.x, pos.y);
-    if (emoji) addEmoji(emoji, pos.x, pos.y);
-  };
-  const handleCanvasDragOver = (e) => {
-    e.preventDefault();
-  };
+  // ===============================================
+  // RENDER UI
+  // ===============================================
 
   return (
-    <div className="w-full h-screen bg-[url('/images/img_.png')] bg-cover bg-center flex flex-col">
+    <div className="animation-tool">
       {/* Top Toolbar */}
-      <div className="flex flex-row justify-start items-center w-full px-4 py-3 gap-4 bg-gray-100">
-        {/* Left Toolbar Section */}
-        <div className="flex flex-row justify-start items-center flex-1 gap-4">
-          {/* Tool Group 1 */}
-          <div className="flex flex-row justify-center items-center bg-white rounded-2xl shadow-[0px_1px_2px_#0000000c] px-3 py-3">
-            <div className="flex flex-row justify-center items-center w-auto">
-              <div className="relative w-16 h-11 flex justify-end items-center">
-                <img
-                  src="/images/img_menuitem_menuitem.svg"
-                  alt="Menu item"
-                  className="w-[50px] h-10"
-                />
-                <img
-                  src="/images/img_group_1.svg"
-                  alt="Group"
-                  className="absolute top-0 left-0 w-[34px] h-9"
-                />
-              </div>
-              <div className="w-[1px] h-3 bg-[#d1d5db] ml-2"></div>
-            </div>
-          </div>
+      <div className="toolbar">
+        <div className="toolbar-left">
+          <div className="logo">LoMoji</div>
+          <input
+            type="text"
+            className="file-name-input"
+            value={fileName}
+            onChange={(e) => setFileName(e.target.value)}
+          />
+          {isSaving && <span className="saving-indicator">Saving...</span>}
+        </div>
 
-          {/* Tool Group 2 */}
-          <div className="flex flex-row justify-center items-center bg-white rounded-full border border-[#e5e7eb] shadow-lg px-4 py-2 gap-4">
-             {/* New File Button */}
+        <div className="toolbar-center">
+          <div className="tool-group" style={{ position: 'relative' }}>
             <button
-              type="button"
-              onClick={() => setShowFileModal(true)}
-              className="flex items-center gap-1 px-3 py-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+              className={`tool-btn ${['select', 'scale', 'draw'].includes(selectedTool) ? 'active' : ''}`}
+              onClick={() => setShowToolPopup(!showToolPopup)}
+              title={
+                selectedTool === 'select' ? 'Select Tool (V)' :
+                selectedTool === 'scale' ? 'Scale Tool (K)' :
+                selectedTool === 'draw' ? 'Draw Artboard (F)' :
+                'Select Tool (V)'
+              }
             >
-              <span className="text-xl">+</span>
-              <span className="text-xs font-medium text-gray-700">New</span>
-            </button>
-            <div className="w-[1px] h-3 bg-[#d1d5db]"></div>
-
-            <button
-              type="button"
-              aria-label="Selection tool"
-              ref={selectButtonRef}
-              onClick={() => handleToolClick('select')}
-              onDoubleClick={() => setShowSelectMenu(true)}
-              onMouseEnter={() => setShowSelectMenu(true)}
-              className={`rounded-xl ${selectedTool === 'select' ? 'ring-2 ring-blue-500' : ''}`}
-            >
-              <img
-                src="/images/img_menuitem_button.svg"
-                alt="Selection tool"
-                className="w-[50px] h-10 cursor-pointer"
-              />
-            </button>
-            {showShapes && (
-              <div ref={shapeDropdownRef} className="absolute mt-28 bg-white border border-[#e5e7eb] rounded-xl shadow-lg p-3 z-50">
-                <div className="mb-2">
-                  <span className="text-xs font-medium text-gray-500 mb-2 block">Shapes</span>
-                  <div className="grid grid-cols-4 gap-3">
-                    {shapesList.map((item) => (
-                      <div
-                        key={item.key}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData('shape', item.key);
-                        }}
-                        className="w-14 h-14 flex items-center justify-center rounded-md hover:bg-[#f6f6f6] border border-[#e5e7eb] cursor-grab active:cursor-grabbing"
-                      >
-                        <svg viewBox="0 0 100 100" className="w-10 h-10 stroke-[#1c1b25] fill-none" strokeWidth="4">
-                          {item.key === 'rectangle' && <rect x="18" y="18" width="64" height="64" rx="4" />}
-                          {item.key === 'circle' && <circle cx="50" cy="50" r="28" />}
-                          {item.key === 'triangle' && <polygon points="50,20 20,80 80,80" />}
-                          {item.key === 'ellipse' && <ellipse cx="50" cy="50" rx="28" ry="18" />}
-                          {item.key === 'pentagon' && <polygon points="50,18 20,45 32,82 68,82 80,45" />}
-                          {item.key === 'hexagon' && <polygon points="30,20 70,20 90,50 70,80 30,80 10,50" />}
-                          {item.key === 'octagon' && <polygon points="35,20 65,20 85,35 85,65 65,80 35,80 15,65 15,35" />}
-                          {item.key === 'rhombus' && <polygon points="50,20 80,50 50,80 20,50" />}
-                          {item.key === 'parallelogram' && <polygon points="30,20 85,20 70,80 15,80" />}
-                          {item.key === 'star' && <polygon points="50,15 60,40 88,40 65,58 72,85 50,70 28,85 35,58 12,40 40,40" />}
-                          {item.key === 'semicircle' && <path d="M20 60 A30 30 0 0 1 80 60 L20 60 Z" />}
-                          {item.key === 'arrow' && <path d="M20 40 H55 V25 L85 50 L55 75 V60 H20 Z" />}
-                        </svg>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="border-t border-gray-100 pt-2">
-                  <span className="text-xs font-medium text-gray-500 mb-2 block">Emojis</span>
-                  <div className="grid grid-cols-4 gap-3">
-                    {emojiList.map((emoji, index) => (
-                      <div
-                        key={index}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData('emoji', emoji);
-                        }}
-                        className="w-14 h-14 flex items-center justify-center rounded-md hover:bg-[#f6f6f6] border border-[#e5e7eb] cursor-grab active:cursor-grabbing text-2xl"
-                      >
-                        {emoji}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-            {showSelectMenu && (
-              <div ref={selectDropdownRef} className="absolute mt-28 bg-white border border-[#e5e7eb] rounded-xl shadow-lg p-3 z-50">
-                <div className="flex flex-col gap-2">
-                  <button
-                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-[#f6f6f6] text-sm text-[#1c1b25]"
-                    onClick={() => { setSelectedTool('select'); setShowSelectMenu(false); }}
-                  >
-                    <span className="text-[#7270ff]">Move / select tool</span>
-                    <span className="ml-auto text-xs text-gray-500">(V)</span>
-                  </button>
-                  <button
-                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-[#f6f6f6] text-sm text-[#1c1b25]"
-                    onClick={() => { setSelectedTool('scale'); setShowSelectMenu(false); }}
-                  >
-                    <span>Scale tool</span>
-                    <span className="ml-auto text-xs text-gray-500">(K)</span>
-                  </button>
-                  <button
-                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-[#f6f6f6] text-sm text-[#1c1b25]"
-                    onClick={() => { setSelectedTool('hand'); setShowSelectMenu(false); }}
-                  >
-                    <span>Hand tool</span>
-                    <span className="ml-auto text-xs text-gray-500">(H)</span>
-                  </button>
-                </div>
-              </div>
-            )}
-            <button
-              type="button"
-              ref={shapeButtonRef}
-              aria-label="Rectangle tool"
-              onClick={() => handleToolClick('rectangle')}
-              className={`rounded-xl ${selectedTool === 'rectangle' ? 'ring-2 ring-blue-500' : ''}`}
-            >
-              <img
-                src="/images/img_menuitem_rectangle.svg"
-                alt="Rectangle tool"
-                className="w-[50px] h-10 cursor-pointer"
-              />
-            </button>
-            {showShapes && (
-              <div ref={shapeDropdownRef} className="absolute mt-28 bg-white border border-[#e5e7eb] rounded-xl shadow-lg p-3 z-50">
-                <div className="mb-2">
-                  <span className="text-xs font-medium text-gray-500 mb-2 block">Shapes</span>
-                  <div className="grid grid-cols-4 gap-3">
-                    {shapesList.map((item) => (
-                      <div
-                        key={item.key}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData('shape', item.key);
-                        }}
-                        className="w-14 h-14 flex items-center justify-center rounded-md hover:bg-[#f6f6f6] border border-[#e5e7eb] cursor-grab active:cursor-grabbing"
-                      >
-                        <svg viewBox="0 0 100 100" className="w-10 h-10 stroke-[#1c1b25] fill-none" strokeWidth="4">
-                          {item.key === 'rectangle' && <rect x="18" y="18" width="64" height="64" rx="4" />}
-                          {item.key === 'circle' && <circle cx="50" cy="50" r="28" />}
-                          {item.key === 'triangle' && <polygon points="50,20 20,80 80,80" />}
-                          {item.key === 'ellipse' && <ellipse cx="50" cy="50" rx="28" ry="18" />}
-                          {item.key === 'pentagon' && <polygon points="50,18 20,45 32,82 68,82 80,45" />}
-                          {item.key === 'hexagon' && <polygon points="30,20 70,20 90,50 70,80 30,80 10,50" />}
-                          {item.key === 'octagon' && <polygon points="35,20 65,20 85,35 85,65 65,80 35,80 15,65 15,35" />}
-                          {item.key === 'rhombus' && <polygon points="50,20 80,50 50,80 20,50" />}
-                          {item.key === 'parallelogram' && <polygon points="30,20 85,20 70,80 15,80" />}
-                          {item.key === 'star' && <polygon points="50,15 60,40 88,40 65,58 72,85 50,70 28,85 35,58 12,40 40,40" />}
-                          {item.key === 'semicircle' && <path d="M20 60 A30 30 0 0 1 80 60 L20 60 Z" />}
-                          {item.key === 'arrow' && <path d="M20 40 H55 V25 L85 50 L55 75 V60 H20 Z" />}
-                        </svg>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="border-t border-gray-100 pt-2">
-                  <span className="text-xs font-medium text-gray-500 mb-2 block">Emojis</span>
-                  <div className="grid grid-cols-4 gap-3">
-                    {emojiList.map((emoji, index) => (
-                      <div
-                        key={index}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData('emoji', emoji);
-                        }}
-                        className="w-14 h-14 flex items-center justify-center rounded-md hover:bg-[#f6f6f6] border border-[#e5e7eb] cursor-grab active:cursor-grabbing text-2xl"
-                      >
-                        {emoji}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-            <button
-              type="button"
-              aria-label="Tool A"
-              onClick={() => handleToolClick('tool-a')}
-              className={`rounded-xl ${selectedTool === 'tool-a' ? 'ring-2 ring-blue-500' : ''}`}
-            >
-              <img
-                src="/images/img_menuitem_button_gray_900_01.svg"
-                alt="Tool"
-                className="w-[50px] h-10 cursor-pointer"
-              />
-            </button>
-            <button
-              type="button"
-              aria-label="Tool B"
-              onClick={() => handleToolClick('tool-b')}
-              className={`rounded-xl ${selectedTool === 'tool-b' ? 'ring-2 ring-blue-500' : ''}`}
-            >
-              <img
-                src="/images/img_menuitem_button_gray_900_01_40x50.svg"
-                alt="Tool"
-                className="w-[50px] h-10 cursor-pointer"
-              />
-            </button>
-            <button
-              type="button"
-              aria-label="Tool C"
-              onClick={() => {
-                if (fileInputRef.current) fileInputRef.current.click();
-              }}
-              className={`rounded-xl ${selectedTool === 'tool-c' ? 'ring-2 ring-blue-500' : ''}`}
-            >
-              <img
-                src="/images/img_menuitem_button_40x50.svg"
-                alt="Import Image"
-                className="w-[50px] h-10 cursor-pointer"
-              />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".svg,image/*"
-              className="hidden"
-              onChange={handleFileImport}
-            />
-            <button
-              type="button"
-              aria-label="Tool D"
-              onClick={() => handleToolClick('tool-d')}
-              className={`rounded-xl ${selectedTool === 'tool-d' ? 'ring-2 ring-blue-500' : ''}`}
-            >
-              <img
-                src="/images/img_menuitem_button_1.svg"
-                alt="Tool"
-                className="w-[50px] h-10 cursor-pointer"
-              />
-            </button>
-            
-            <div className="w-[1px] h-3 bg-[#d1d5db]"></div>
-            
-            {/* Undo/Redo Group */}
-            <div className="flex flex-row items-center gap-1">
-              <button
-                type="button"
-                onClick={undo}
-                className="p-1.5 hover:bg-gray-100 rounded-full transition-colors"
-                title="Undo"
-              >
-                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              {selectedTool === 'select' && (
+                <svg width="20" height="20" viewBox="0 0 20 20">
+                  <path d="M3 3 L3 17 L8 12 L11 15 L17 3 Z" fill="currentColor" />
                 </svg>
-              </button>
-              <button
-                type="button"
-                onClick={redo}
-                className="p-1.5 hover:bg-gray-100 rounded-full transition-colors"
-                title="Redo"
-              >
-                <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
+              )}
+              {selectedTool === 'scale' && (
+                <svg width="20" height="20" viewBox="0 0 20 20">
+                  <rect x="4" y="4" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" />
+                  <circle cx="4" cy="4" r="2" fill="currentColor" />
+                  <circle cx="16" cy="4" r="2" fill="currentColor" />
+                  <circle cx="16" cy="16" r="2" fill="currentColor" />
+                  <circle cx="4" cy="16" r="2" fill="currentColor" />
                 </svg>
-              </button>
-            </div>
-            
-            <div className="w-[1px] h-3 bg-[#d1d5db]"></div>
-            
-            <button
-              type="button"
-              aria-label="Animation"
-              role="switch"
-              aria-checked={animateEnabled}
-              onClick={() => handleAnimateToggle(!animateEnabled)}
-              className={`ml-2 flex items-center gap-2 px-3 py-1.5 rounded-full border transition-colors duration-200 ${
-                animateEnabled ? 'bg-blue-50 border-blue-400' : 'bg-[#f6f6f6] border-[#d1d5db]'
-              }`}
-            >
-              <span className="text-xs font-medium text-[#1c1b25]">Animation</span>
-              <span className="relative inline-flex items-center w-9 h-5 bg-white rounded-full">
-                <span
-                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-[#7270ff] transition-transform duration-200 ${
-                    animateEnabled ? 'translate-x-4' : 'translate-x-0'
-                  }`}
-                />
-              </span>
-            </button>
-            {isSaving && <span className="text-xs text-gray-400">Saving...</span>}
-          </div>
-        </div>
-
-        {/* Animate Toggle */}
-        <div className="flex flex-row justify-center items-center bg-white rounded-2xl shadow-[0px_1px_2px_#0000000c] px-4 py-3">
-          <div className="flex flex-row justify-center items-center px-2 py-2.5">
-            <div className="flex flex-row justify-center items-center border border-[#7270ff] rounded-lg px-1.5 py-1.5">
-              <span className="text-xs font-medium text-[#7270ff] text-center">Share</span>
-            </div>
-            <button className="bg-[#7270ff] border border-[#7270ff] rounded-lg px-8 py-1.5 ml-2">
-              <span className="text-xs font-medium text-white text-center">Export</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex flex-row justify-start items-start flex-1 px-4 gap-4 bg-gray-100">
-        <div className="flex flex-col justify-start items-start bg-white rounded-2xl shadow-[0px_2px_4px_#9ca3af19] p-2 w-60">
-          <div className="flex flex-row justify-start items-center flex-1 w-full">
-            <div className="flex flex-row justify-start items-center w-full px-1 py-1">
-              <div className="flex flex-row justify-start items-center w-full px-1 py-1">
-                <span className="text-xs font-medium text-[#4b5563] ml-1">Artboard 1</span>
-              </div>
-            </div>
-          </div>
-          <span className="text-xs font-normal text-[#a6a4b0] ml-1.5 mb-1.5">Create a shape to get started.</span>
-        </div>
-        <div className="flex-1 flex items-center justify-center">
-          <div className="bg-white rounded-2xl shadow-[0px_2px_4px_#9ca3af19] p-3 border border-[#e5e7eb]">
-            <canvas
-              ref={canvasRef}
-              width={700}
-              height={450}
-              className="bg-white rounded-xl border border-[#e5e7eb]"
-              onMouseDown={startDrawing}
-              onMouseMove={draw}
-              onMouseUp={endDrawing}
-              onMouseLeave={endDrawing}
-              onDrop={handleCanvasDrop}
-              onDragOver={handleCanvasDragOver}
-            />
-          </div>
-        </div>
-        <div className="sticky top-3 ml-auto flex flex-col justify-start items-center bg-white rounded-2xl shadow-[0px_2px_4px_#9ca3af19] w-60">
-          <div className="flex flex-col justify-start items-start flex-1 w-full border-t border-[#e5e7eb] mb-42">
-            <span className="text-xs font-medium text-[#1c1b25] ml-3 mt-2.5">Artboard</span>
-            <div className="flex flex-col justify-start items-center w-full gap-2.5 mt-2.5">
-              <div className="flex flex-row justify-start items-center w-full">
-                <div className="flex flex-col justify-start items-center w-full gap-2.5">
-                  <div className="flex flex-row justify-center items-center flex-1 w-full px-3">
-                    <span className="text-xs font-normal text-[#a6a4b0]">Size</span>
-                    <div className="flex flex-row justify-end items-center flex-1">
-                      <span className="bg-[#f6f6f6] rounded px-2.5 py-0.5 text-xs font-normal text-[#1c1b25]">1200</span>
-                      <span className="bg-[#f6f6f6] rounded px-3 py-0.5 ml-2 text-xs font-normal text-[#1c1b25]">900</span>
-                    </div>
-                  </div>
-                  <div className="flex flex-row justify-between items-center flex-1 w-full px-3">
-                    <span className="text-xs font-normal text-[#a6a4b0]">Duration</span>
-                    <span className="bg-[#f6f6f6] rounded px-4 py-0.5 text-xs font-normal text-[#1c1b25]">3 s</span>
-                  </div>
-                  <div className="w-full h-[1px] bg-[#e5e7eb]"></div>
-                </div>
-              </div>
-            </div>
-            <span className="text-xs font-medium text-[#1c1b25] ml-3 mt-3.5">Background</span>
-            <div className="flex flex-row justify-start items-center flex-1 w-full px-3 mt-3.5">
-              <div className="flex flex-row justify-center items-center bg-[#f6f6f6] rounded px-2 py-1.5 w-28">
-                <img src="/images/img_gradient.png" alt="Gradient" className="w-3.5 h-3.5 rounded" />
-                <span className="text-xs font-normal text-[#1c1b25] ml-2">Transparent</span>
-              </div>
-              <img src="/images/img_button_toggle.svg" alt="Toggle" className="w-5 h-5 ml-2" />
-            </div>
-            <div className="w-full h-[1px] bg-[#e5e7eb] mt-3"></div>
-            <div className="w-full px-3 py-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-[#1c1b25]">Layers</span>
-                <button
-                  className="px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100"
-                  onClick={() => {
-                    const nextIndex = layers.length + 1;
-                    const newLayer = { id: `layer-${Date.now()}`, name: `Layer ${nextIndex}`, visible: true };
-                    setLayers([...layers, newLayer]);
-                    setCurrentLayerId(newLayer.id);
-                  }}
-                >
-                  Add
-                </button>
-              </div>
-              <div className="mt-2 border border-gray-200 rounded">
-                {layers.map((layer) => (
-                  <div
-                    key={layer.id}
-                    className={`flex items-center gap-2 px-2 py-1 text-xs cursor-pointer ${currentLayerId === layer.id ? 'bg-blue-50' : ''}`}
-                    onClick={() => setCurrentLayerId(layer.id)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      const strokeId = e.dataTransfer.getData('stroke-id');
-                      if (!strokeId) return;
-                      setStrokes((prev) => prev.map((s) => s.id.toString() === strokeId ? { ...s, layerId: layer.id } : s));
-                    }}
-                  >
-                    <button
-                      className="text-gray-600"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, visible: !l.visible } : l));
-                      }}
-                      title={layer.visible ? 'Hide layer' : 'Show layer'}
-                    >
-                      {layer.visible ? '👁️' : '🚫'}
-                    </button>
-                    <input
-                      className="flex-1 bg-transparent outline-none"
-                      value={layer.name}
-                      onChange={(e) => setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, name: e.target.value } : l))}
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="text-[11px] text-gray-700 font-semibold px-1 py-1 mt-2">Objects</div>
-              <div className="border border-gray-200 rounded">
-                {strokes.filter(s => (s.layerId || 'layer-1') === currentLayerId).map((stroke, index) => (
-                  <div
-                    key={stroke.id}
-                    className={`flex items-center px-2 py-1 text-xs border-b border-gray-100 ${stroke.selected ? 'bg-blue-50 text-blue-700' : 'text-gray-600'} hover:bg-gray-100`}
-                    draggable
-                    onDragStart={(e) => e.dataTransfer.setData('stroke-id', stroke.id.toString())}
-                    onClick={() => {
-                      setStrokes(prev => prev.map(s => s.id === stroke.id ? { ...s, selected: !s.selected } : s));
-                    }}
-                  >
-                    <button
-                      className="mr-2"
-                      title={stroke.hidden ? 'Show object' : 'Hide object'}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setStrokes(prev => prev.map(s => s.id === stroke.id ? { ...s, hidden: !s.hidden } : s));
-                      }}
-                    >
-                      {stroke.hidden ? '🚫' : '👁️'}
-                    </button>
-                    <span className="truncate flex-1">
-                      {stroke.type === 'emoji' ? 'Emoji' : stroke.type} {index + 1}
-                    </span>
-                    <button
-                      className="text-red-600 ml-2"
-                      title="Delete object"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const newStrokes = strokes.filter(s => s.id !== stroke.id);
-                        saveHistory(newStrokes);
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Bottom Timeline - Dynamic Implementation */}
-      <div className="flex flex-col w-full h-64 bg-white border-t border-gray-200 mt-auto">
-        {/* Timeline Toolbar */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50">
-          <div className="flex items-center gap-4">
-            {/* Playback Controls */}
-            <button
-              className="p-1 hover:bg-gray-200 rounded"
-              onClick={() => setIsPlaying(!isPlaying)}
-            >
-              {isPlaying ? (
-                <span className="font-bold text-gray-700 text-lg w-6 h-6 flex items-center justify-center">||</span>
-              ) : (
-                <img
-                  src="/images/img_button_play_pause.svg"
-                  alt="Play"
-                  className="w-6 h-6"
-                />
+              )}
+              {selectedTool === 'draw' && (
+                <svg width="20" height="20" viewBox="0 0 20 20">
+                  <rect x="3" y="3" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="3,2" />
+                </svg>
+              )}
+              {!['select', 'scale', 'draw'].includes(selectedTool) && (
+                <svg width="20" height="20" viewBox="0 0 20 20">
+                  <path d="M3 3 L3 17 L8 12 L11 15 L17 3 Z" fill="currentColor" />
+                </svg>
               )}
             </button>
 
-            {/* Time Display */}
-            <div className="flex items-center gap-2 text-sm font-mono bg-white px-2 py-1 rounded border border-gray-300">
-              <span className="text-blue-600 font-bold">{currentFrame}</span>
-              <span className="text-gray-400">/</span>
-              <span className="text-gray-600">{totalFrames}</span>
-              <span className="text-xs text-gray-400 ml-1">f</span>
-            </div>
+            {/* Tool Selection Popup */}
+            {showToolPopup && (
+              <div ref={toolPopupRef} className="tool-popup">
+                <button
+                  className={`tool-popup-item ${selectedTool === 'select' ? 'active' : ''}`}
+                  onClick={() => handleToolSelection('select')}
+                >
+                  <div className="tool-popup-icon">
+                    <svg width="20" height="20" viewBox="0 0 20 20">
+                      <path d="M3 3 L3 17 L8 12 L11 15 L17 3 Z" fill="currentColor" />
+                    </svg>
+                  </div>
+                  <div className="tool-popup-details">
+                    <span className="tool-popup-name">Move / select</span>
+                    <span className="tool-popup-shortcut">V</span>
+                  </div>
+                </button>
 
-            {/* FPS Selection */}
-            <select
-              value={fps}
-              onChange={(e) => setFps(Number(e.target.value))}
-              className="text-xs border border-gray-300 rounded px-1 py-1"
+                <button
+                  className={`tool-popup-item ${selectedTool === 'scale' ? 'active' : ''}`}
+                  onClick={() => handleToolSelection('scale')}
+                >
+                  <div className="tool-popup-icon">
+                    <svg width="20" height="20" viewBox="0 0 20 20">
+                      <rect x="4" y="4" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" />
+                      <circle cx="4" cy="4" r="2" fill="currentColor" />
+                      <circle cx="16" cy="4" r="2" fill="currentColor" />
+                      <circle cx="16" cy="16" r="2" fill="currentColor" />
+                      <circle cx="4" cy="16" r="2" fill="currentColor" />
+                    </svg>
+                  </div>
+                  <div className="tool-popup-details">
+                    <span className="tool-popup-name">Scale</span>
+                    <span className="tool-popup-shortcut">K</span>
+                  </div>
+                </button>
+
+                <button
+                  className={`tool-popup-item ${selectedTool === 'hand' ? 'active' : ''}`}
+                  onClick={() => handleToolSelection('hand')}
+                >
+                  <div className="tool-popup-icon">
+                    <svg width="20" height="20" viewBox="0 0 20 20">
+                      <path d="M9 2 V8 M13 6 V8 M11 4 V8 M7 6 V12 C7 12 6 15 9 16 C12 17 17 14 17 11 V8 L13 8" stroke="currentColor" strokeWidth="2" fill="none" />
+                    </svg>
+                  </div>
+                  <div className="tool-popup-details">
+                    <span className="tool-popup-name">Hand</span>
+                    <span className="tool-popup-shortcut">H</span>
+                  </div>
+                </button>
+
+                <button
+                  className={`tool-popup-item ${selectedTool === 'draw' ? 'active' : ''}`}
+                  onClick={() => handleToolSelection('draw')}
+                >
+                  <div className="tool-popup-icon">
+                    <svg width="20" height="20" viewBox="0 0 20 20">
+                      <rect x="3" y="3" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="3,2" />
+                    </svg>
+                  </div>
+                  <div className="tool-popup-details">
+                    <span className="tool-popup-name">Draw artboard</span>
+                    <span className="tool-popup-shortcut">F</span>
+                  </div>
+                </button>
+              </div>
+            )}
+
+            <button
+              className={`tool-btn ${selectedTool === 'hand' ? 'active' : ''}`}
+              onClick={() => setSelectedTool('hand')}
+              title="Hand Tool (H)"
             >
-              <option value={12}>12 FPS</option>
-              <option value={24}>24 FPS</option>
-              <option value={30}>30 FPS</option>
-              <option value={60}>60 FPS</option>
-            </select>
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <path d="M9 2 V8 M13 6 V8 M11 4 V8 M7 6 V12 C7 12 6 15 9 16 C12 17 17 14 17 11 V8 L13 8" stroke="currentColor" strokeWidth="2" fill="none" />
+              </svg>
+            </button>
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* Auto-Keying Toggle */}
-            <button
-              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${
-                autoKeying
-                  ? 'bg-red-100 text-red-600 border-red-200'
-                  : 'bg-white text-gray-600 border-gray-300'
-              }`}
-              onClick={() => setAutoKeying(!autoKeying)}
-              title="Auto-Keying: Automatically create keyframes when moving objects"
-            >
-              <div
-                className={`w-2 h-2 rounded-full ${
-                  autoKeying ? 'bg-red-500' : 'bg-gray-400'
-                }`}
-              ></div>
-              Auto-Key
-            </button>
+          <div className="tool-divider"></div>
 
-            {/* Onion Skin Toggle */}
+          <div className="tool-group">
             <button
-              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${
-                onionSkin
-                  ? 'bg-blue-100 text-blue-600 border-blue-200'
-                  : 'bg-white text-gray-600 border-gray-300'
-              }`}
-              onClick={() => setOnionSkin(!onionSkin)}
+              className="tool-btn"
+              onClick={undo}
+              disabled={historyStep <= 0}
+              title="Undo (Ctrl+Z)"
             >
-              Onion Skin
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <path d="M6 8 L2 8 L2 4 M2 8 Q2 12 6 14 T14 14" stroke="currentColor" strokeWidth="2" fill="none" />
+              </svg>
             </button>
-
-            {/* Zoom Controls */}
-            <div className="flex items-center border border-gray-300 rounded overflow-hidden">
-              <button
-                className="px-2 py-1 hover:bg-gray-100 text-gray-600"
-                onClick={() => setTimelineScale(Math.max(0.5, timelineScale - 0.25))}
-              >
-                -
-              </button>
-              <span className="px-2 text-xs text-gray-500">
-                {Math.round(timelineScale * 100)}%
-              </span>
-              <button
-                className="px-2 py-1 hover:bg-gray-100 text-gray-600"
-                onClick={() => setTimelineScale(Math.min(3, timelineScale + 0.25))}
-              >
-                +
-              </button>
-            </div>
+            <button
+              className="tool-btn"
+              onClick={redo}
+              disabled={historyStep >= history.length - 1}
+              title="Redo (Ctrl+Y)"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <path d="M14 8 L18 8 L18 4 M18 8 Q18 12 14 14 T6 14" stroke="currentColor" strokeWidth="2" fill="none" />
+              </svg>
+            </button>
           </div>
         </div>
 
-        {/* Timeline Tracks Area */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Track Headers (Left Sidebar) */}
-          <div className="w-48 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto">
-            <div className="h-8 border-b border-gray-200 flex items-center px-2 text-xs font-bold text-gray-700 bg-gray-100">
-              Master
+        <div className="toolbar-right">
+          <button
+            className="btn-primary"
+            onClick={saveProject}
+            disabled={isSaving || !userEmail}
+            title={!userEmail ? 'Please login to save' : 'Save project (Ctrl+S)'}
+            style={{ marginRight: '10px', opacity: isSaving ? 0.6 : 1 }}
+          >
+            {isSaving ? 'Saving...' : 'Save'}
+          </button>
+          <button className="btn-primary">Export</button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="content">
+        {/* Vertical Icon Sidebar */}
+        <div className="icon-sidebar">
+          <button
+            className={`icon-sidebar-btn ${leftPanelView === 'layers' ? 'active' : ''}`}
+            onClick={() => setLeftPanelView('layers')}
+            data-tooltip="Layers"
+          >
+            📁
+          </button>
+
+          <button
+            className={`icon-sidebar-btn ${leftPanelView === 'shapes' ? 'active' : ''}`}
+            onClick={() => {
+              setLeftPanelView('assets');
+              setSelectedAssetCategory('shapes');
+            }}
+            data-tooltip="Shapes"
+          >
+            ▭
+          </button>
+
+          <button
+            className={`icon-sidebar-btn ${leftPanelView === 'icons' ? 'active' : ''}`}
+            onClick={() => {
+              setLeftPanelView('assets');
+              setSelectedAssetCategory('icons');
+            }}
+            data-tooltip="Icons"
+          >
+            🔧
+          </button>
+
+          <button
+            className={`icon-sidebar-btn ${leftPanelView === 'emojis' ? 'active' : ''}`}
+            onClick={() => {
+              setLeftPanelView('assets');
+              setSelectedAssetCategory('emojis');
+            }}
+            data-tooltip="Emojis"
+          >
+            😀
+          </button>
+
+          <button
+            className={`icon-sidebar-btn ${leftPanelView === 'arrows' ? 'active' : ''}`}
+            onClick={() => {
+              setLeftPanelView('assets');
+              setSelectedAssetCategory('arrows');
+            }}
+            data-tooltip="Arrows"
+          >
+            ➡️
+          </button>
+
+          <button
+            className={`icon-sidebar-btn ${leftPanelView === 'symbols' ? 'active' : ''}`}
+            onClick={() => {
+              setLeftPanelView('assets');
+              setSelectedAssetCategory('symbols');
+            }}
+            data-tooltip="Symbols"
+          >
+            ✨
+          </button>
+          <button
+            className={`icon-sidebar-btn ${leftPanelView === 'text' ? 'active' : ''}`}
+            onClick={() => setLeftPanelView('text')}
+            data-tooltip="Text"
+          >
+            T
+          </button>
+
+          <button
+            className={`icon-sidebar-btn ${leftPanelView === 'animation' ? 'active' : ''}`}
+            onClick={() => setLeftPanelView('animation')}
+            data-tooltip="Animations"
+          >
+            🎬
+          </button>
+        </div>
+
+        {/* Conditional Panel: Layers, Assets, or Text */}
+        {leftPanelView === 'layers' && showLayersPanel && (
+          <div className="layers-panel panel">
+            <div className="panel-header">
+              <h3>Layers</h3>
+              <button
+                className="panel-close-btn"
+                onClick={() => setShowLayersPanel(false)}
+              >×</button>
             </div>
-            {strokes.map((stroke, index) => (
-              <div
-                key={stroke.id}
-                className={`h-8 border-b border-gray-200 flex items-center px-2 text-xs ${
-                  stroke.selected ? 'bg-blue-50 text-blue-700' : 'text-gray-600'
-                } cursor-pointer hover:bg-gray-100`}
-                onClick={() => {
-                }}
+
+            <div className="layers-list">
+              {objects.length === 0 ? (
+                <div className="empty-state">No objects yet</div>
+              ) : (
+                objects.map((obj, index) => (
+                  <div
+                    key={obj.id}
+                    className={`layer-item ${selectedObjectIds.includes(obj.id) ? 'selected' : ''}`}
+                    onClick={() => setSelectedObjectIds([obj.id])}
+                  >
+                    <div className="layer-item-left">
+                      <button
+                        className="layer-expand-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedLayers(prev => ({ ...prev, [obj.id]: !prev[obj.id] }));
+                        }}
+                      >
+                        {expandedLayers[obj.id] ? '▼' : '▶'}
+                      </button>
+                      <span className="layer-icon">
+                        {obj.type === 'rectangle' && '▭'}
+                        {obj.type === 'circle' && '●'}
+                        {obj.type === 'emoji' && obj.emoji}
+                        {obj.type === 'text' && 'T'}
+                      </span>
+                      <span className="layer-name">{obj.name}</span>
+                    </div>
+
+                    <div className="layer-item-right">
+                      <button
+                        className={`layer-visibility-btn ${obj.visible ? '' : 'hidden'}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          updateObject(obj.id, { visible: !obj.visible });
+                        }}
+                      >
+                        {obj.visible ? '👁' : '👁‍🗨'}
+                      </button>
+                      <button
+                        className={`layer-lock-btn ${obj.locked ? 'locked' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          updateObject(obj.id, { locked: !obj.locked });
+                        }}
+                      >
+                        {obj.locked ? '🔒' : '🔓'}
+                      </button>
+                    </div>
+
+                    {expandedLayers[obj.id] && (
+                      <div className="layer-properties">
+                        <div className="layer-property">
+                          <span>Position</span>
+                          <button
+                            className={`keyframe-btn ${hasKeyframeAt(obj.id, 'position', Math.round(currentFrame)) ? 'active' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (hasKeyframeAt(obj.id, 'position', Math.round(currentFrame))) {
+                                removeKeyframe(obj.id, 'position', Math.round(currentFrame));
+                              } else {
+                                addKeyframe(obj.id, 'position', Math.round(currentFrame), { x: obj.x, y: obj.y });
+                              }
+                            }}
+                          >
+                            ◆
+                          </button>
+                        </div>
+                        <div className="layer-property">
+                          <span>Scale</span>
+                          <button
+                            className={`keyframe-btn ${hasKeyframeAt(obj.id, 'scale', Math.round(currentFrame)) ? 'active' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (hasKeyframeAt(obj.id, 'scale', Math.round(currentFrame))) {
+                                removeKeyframe(obj.id, 'scale', Math.round(currentFrame));
+                              } else {
+                                addKeyframe(obj.id, 'scale', Math.round(currentFrame), { width: obj.width, height: obj.height });
+                              }
+                            }}
+                          >
+                            ◆
+                          </button>
+                        </div>
+                        <div className="layer-property">
+                          <span>Rotation</span>
+                          <button
+                            className={`keyframe-btn ${hasKeyframeAt(obj.id, 'rotation', Math.round(currentFrame)) ? 'active' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (hasKeyframeAt(obj.id, 'rotation', Math.round(currentFrame))) {
+                                removeKeyframe(obj.id, 'rotation', Math.round(currentFrame));
+                              } else {
+                                addKeyframe(obj.id, 'rotation', Math.round(currentFrame), obj.rotation);
+                              }
+                            }}
+                          >
+                            ◆
+                          </button>
+                        </div>
+                        <div className="layer-property">
+                          <span>Opacity</span>
+                          <button
+                            className={`keyframe-btn ${hasKeyframeAt(obj.id, 'opacity', Math.round(currentFrame)) ? 'active' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (hasKeyframeAt(obj.id, 'opacity', Math.round(currentFrame))) {
+                                removeKeyframe(obj.id, 'opacity', Math.round(currentFrame));
+                              } else {
+                                addKeyframe(obj.id, 'opacity', Math.round(currentFrame), obj.opacity);
+                              }
+                            }}
+                          >
+                            ◆
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              className="add-layer-btn"
+              onClick={() => addObject('rectangle')}
+            >
+              + Add Layer
+            </button>
+          </div>
+        )}
+
+        {/* Assets Panel */}
+        {leftPanelView === 'assets' && (
+          <AssetsPanel
+            selectedCategory={selectedAssetCategory}
+            setSelectedCategory={setSelectedAssetCategory}
+            searchQuery={assetSearchQuery}
+            setSearchQuery={setAssetSearchQuery}
+            onAssetClick={(asset) => {
+              // Add asset to canvas
+              if (asset.type === 'emoji') {
+                addObject('emoji', {
+                  emoji: asset.emoji,
+                  width: 60,
+                  height: 60
+                });
+              } else if (asset.type === 'rectangle' || asset.type === 'circle') {
+                addObject(asset.type, {
+                  fill: asset.fill || '#6366f1',
+                  name: asset.name
+                });
+              } else {
+                // For other shapes (triangle, star, heart, diamond), use circle for now
+                addObject('circle', {
+                  fill: asset.fill || '#6366f1',
+                  name: asset.name
+                });
+              }
+            }}
+            onClose={() => setLeftPanelView('layers')}
+          />
+        )}
+
+        {/* Text Assets Panel */}
+        {leftPanelView === 'text' && (
+          <TextAssetsPanel
+            onTextClick={(textOptions) => addObject('text', textOptions)}
+            onClose={() => setLeftPanelView('layers')}
+          />
+        )}
+
+        {/* Animation Assets Panel */}
+        {leftPanelView === 'animation' && (
+          <AnimationAssetsPanel
+            selectedCategory={selectedAnimationCategory}
+            setSelectedCategory={setSelectedAnimationCategory}
+            searchQuery={animationSearchQuery}
+            setSearchQuery={setAnimationSearchQuery}
+            onAnimationClick={handleApplyAnimationPreset}
+            onClose={() => setLeftPanelView('layers')}
+            selectedObject={selectedObject}
+            currentFrame={Math.round(currentFrame)}
+          />
+        )}
+
+        {/* Canvas */}
+        <div className="canvas-container">
+          <canvas
+            ref={canvasRef}
+            width={1200}
+            height={600}
+            className="main-canvas"
+            onMouseDown={handleCanvasMouseDown}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
+            onMouseLeave={handleCanvasMouseUp}
+            onDoubleClick={handleCanvasDoubleClick}
+          />
+
+          {/* Text Input Overlay */}
+          {editingTextId && (
+            <input
+              ref={textInputRef}
+              type="text"
+              className="canvas-text-input"
+              style={{
+                position: 'fixed',
+                left: `${textInputPosition.x}px`,
+                top: `${textInputPosition.y}px`,
+                transform: 'translate(-50%, -50%)',
+                fontSize: '24px',
+                fontFamily: 'Arial',
+                textAlign: 'center',
+                minWidth: '200px',
+                padding: '8px',
+                border: '2px solid #6366f1',
+                borderRadius: '4px',
+                background: '#ffffff',
+                zIndex: 1000
+              }}
+              value={textInputValue}
+              onChange={handleTextInputChange}
+              onBlur={handleTextInputBlur}
+              onKeyDown={handleTextInputKeyDown}
+            />
+          )}
+        </div>
+
+        {/* Properties Panel */}
+        {showPropertiesPanel && selectedObject && (
+          <div className="properties-panel panel">
+            <div className="panel-header">
+              <h3>Properties</h3>
+              <button
+                className="panel-close-btn"
+                onClick={() => setShowPropertiesPanel(false)}
+              >×</button>
+            </div>
+
+            {/* Tab Navigation */}
+            <div className="properties-tabs">
+              <button
+                className={`properties-tab ${propertiesPanelTab === 'properties' ? 'active' : ''}`}
+                onClick={() => setPropertiesPanelTab('properties')}
               >
-                <span className="truncate w-full">
-                  {stroke.type === 'text'
-                    ? stroke.text || 'Text'
-                    : stroke.type === 'emoji'
-                    ? stroke.emoji
-                    : stroke.type}{' '}
-                  {index + 1}
-                </span>
+                Properties
+              </button>
+              <button
+                className={`properties-tab ${propertiesPanelTab === 'animation' ? 'active' : ''}`}
+                onClick={() => setPropertiesPanelTab('animation')}
+              >
+                Animation
+              </button>
+            </div>
+
+            <div className="properties-content">
+              {/* Properties Tab Content */}
+              {propertiesPanelTab === 'properties' && (
+                <>
+                  <div className="property-group">
+                    <label>Name</label>
+                    <input
+                      type="text"
+                      value={selectedObject.name}
+                      onChange={(e) => updateObject(selectedObject.id, { name: e.target.value })}
+                    />
+                  </div>
+
+              <div className="property-group">
+                <label>Position</label>
+                <div className="property-row">
+                  <div className="property-input-group">
+                    <span className="property-label">X</span>
+                    <input
+                      type="number"
+                      value={Math.round(selectedObject.x)}
+                      onChange={(e) => updateObject(selectedObject.id, { x: parseFloat(e.target.value) })}
+                    />
+                    <button
+                      className={`keyframe-btn-inline ${hasKeyframeAt(selectedObject.id, 'position', Math.round(currentFrame)) ? 'active' : ''}`}
+                      onClick={() => {
+                        if (hasKeyframeAt(selectedObject.id, 'position', Math.round(currentFrame))) {
+                          removeKeyframe(selectedObject.id, 'position', Math.round(currentFrame));
+                        } else {
+                          addKeyframe(selectedObject.id, 'position', Math.round(currentFrame), { x: selectedObject.x, y: selectedObject.y });
+                        }
+                      }}
+                    >
+                      ◆
+                    </button>
+                  </div>
+                  <div className="property-input-group">
+                    <span className="property-label">Y</span>
+                    <input
+                      type="number"
+                      value={Math.round(selectedObject.y)}
+                      onChange={(e) => updateObject(selectedObject.id, { y: parseFloat(e.target.value) })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="property-group">
+                <label>Size</label>
+                <div className="property-row">
+                  <div className="property-input-group">
+                    <span className="property-label">W</span>
+                    <input
+                      type="number"
+                      value={Math.round(selectedObject.width)}
+                      onChange={(e) => updateObject(selectedObject.id, { width: parseFloat(e.target.value) })}
+                    />
+                    <button
+                      className={`keyframe-btn-inline ${hasKeyframeAt(selectedObject.id, 'scale', Math.round(currentFrame)) ? 'active' : ''}`}
+                      onClick={() => {
+                        if (hasKeyframeAt(selectedObject.id, 'scale', Math.round(currentFrame))) {
+                          removeKeyframe(selectedObject.id, 'scale', Math.round(currentFrame));
+                        } else {
+                          addKeyframe(selectedObject.id, 'scale', Math.round(currentFrame), { width: selectedObject.width, height: selectedObject.height });
+                        }
+                      }}
+                    >
+                      ◆
+                    </button>
+                  </div>
+                  <div className="property-input-group">
+                    <span className="property-label">H</span>
+                    <input
+                      type="number"
+                      value={Math.round(selectedObject.height)}
+                      onChange={(e) => updateObject(selectedObject.id, { height: parseFloat(e.target.value) })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="property-group">
+                <label>Rotation</label>
+                <div className="property-input-group">
+                  <input
+                    type="number"
+                    value={Math.round(selectedObject.rotation)}
+                    onChange={(e) => updateObject(selectedObject.id, { rotation: parseFloat(e.target.value) })}
+                  />
+                  <span className="property-unit">°</span>
+                  <button
+                    className={`keyframe-btn-inline ${hasKeyframeAt(selectedObject.id, 'rotation', Math.round(currentFrame)) ? 'active' : ''}`}
+                    onClick={() => {
+                      if (hasKeyframeAt(selectedObject.id, 'rotation', Math.round(currentFrame))) {
+                        removeKeyframe(selectedObject.id, 'rotation', Math.round(currentFrame));
+                      } else {
+                        addKeyframe(selectedObject.id, 'rotation', Math.round(currentFrame), selectedObject.rotation);
+                      }
+                    }}
+                  >
+                    ◆
+                  </button>
+                </div>
+              </div>
+
+              <div className="property-group">
+                <label>Opacity</label>
+                <div className="property-input-group">
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={selectedObject.opacity}
+                    onChange={(e) => updateObject(selectedObject.id, { opacity: parseFloat(e.target.value) })}
+                  />
+                  <span className="property-value">{Math.round(selectedObject.opacity * 100)}%</span>
+                  <button
+                    className={`keyframe-btn-inline ${hasKeyframeAt(selectedObject.id, 'opacity', Math.round(currentFrame)) ? 'active' : ''}`}
+                    onClick={() => {
+                      if (hasKeyframeAt(selectedObject.id, 'opacity', Math.round(currentFrame))) {
+                        removeKeyframe(selectedObject.id, 'opacity', Math.round(currentFrame));
+                      } else {
+                        addKeyframe(selectedObject.id, 'opacity', Math.round(currentFrame), selectedObject.opacity);
+                      }
+                    }}
+                  >
+                    ◆
+                  </button>
+                </div>
+              </div>
+
+              {selectedObject.type !== 'emoji' && selectedObject.type !== 'text' && (
+                <>
+                  <div className="property-group">
+                    <label>Fill Color</label>
+                    <input
+                      type="color"
+                      value={selectedObject.fill}
+                      onChange={(e) => updateObject(selectedObject.id, { fill: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="property-group">
+                    <label>Stroke Color</label>
+                    <input
+                      type="color"
+                      value={selectedObject.stroke}
+                      onChange={(e) => updateObject(selectedObject.id, { stroke: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="property-group">
+                    <label>Stroke Width</label>
+                    <input
+                      type="number"
+                      value={selectedObject.strokeWidth}
+                      onChange={(e) => updateObject(selectedObject.id, { strokeWidth: parseFloat(e.target.value) })}
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="property-group">
+                <button
+                  className="btn-danger"
+                  onClick={() => {
+                    deleteObject(selectedObject.id);
+                    saveHistory(objects);
+                  }}
+                >
+                  Delete Object
+                </button>
+              </div>
+                </>
+              )}
+
+              {/* Animation Tab Content */}
+              {propertiesPanelTab === 'animation' && (
+                <>
+                  <div className="property-group">
+                    <label>Add Animation</label>
+                    <button
+                      className="btn-animation-preset"
+                      onClick={() => setShowAnimationPresetsDialog(true)}
+                    >
+                      ✨ Add Animation Preset
+                    </button>
+                  </div>
+
+                  {/* Show Existing Keyframes */}
+                  {keyframes[selectedObject.id] && Object.keys(keyframes[selectedObject.id]).length > 0 && (
+                    <div className="property-group">
+                      <label>Existing Animations</label>
+                      <div className="animation-list">
+                        {Object.keys(keyframes[selectedObject.id]).map(property => (
+                          <div key={property} className="animation-item">
+                            <div className="animation-item-header">
+                              <span className="animation-property-name">{property.charAt(0).toUpperCase() + property.slice(1)}</span>
+                              <span className="animation-keyframe-count">
+                                {keyframes[selectedObject.id][property].length} keyframe{keyframes[selectedObject.id][property].length > 1 ? 's' : ''}
+                              </span>
+                            </div>
+                            <div className="animation-keyframes">
+                              {keyframes[selectedObject.id][property].map((kf, idx) => (
+                                <div key={idx} className="keyframe-chip">
+                                  <span>Frame {kf.frame}</span>
+                                  <button
+                                    className="keyframe-chip-delete"
+                                    onClick={() => removeKeyframe(selectedObject.id, property, kf.frame)}
+                                    title="Remove keyframe"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* No animations state */}
+                  {(!keyframes[selectedObject.id] || Object.keys(keyframes[selectedObject.id]).length === 0) && (
+                    <div className="empty-state-animation">
+                      <div className="empty-state-icon">🎬</div>
+                      <div className="empty-state-text">No animations yet</div>
+                      <div className="empty-state-hint">Click "Add Animation Preset" to get started</div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Animation Presets Dialog */}
+        <AnimationPresetsDialog
+          isOpen={showAnimationPresetsDialog}
+          onClose={() => setShowAnimationPresetsDialog(false)}
+          onApplyPreset={handleApplyAnimationPreset}
+          selectedObject={selectedObject}
+          currentFrame={Math.round(currentFrame)}
+        />
+      </div>
+
+      {/* Timeline */}
+      <div className="timeline">
+        <div className="timeline-header">
+          <div className="playback-controls">
+            <button
+              className="playback-btn"
+              onClick={() => setCurrentFrame(0)}
+              title="Go to Start (Home)"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16">
+                <path d="M2 2 L2 14 M6 2 L14 8 L6 14 Z" fill="currentColor" />
+              </svg>
+            </button>
+
+            <button
+              className="playback-btn"
+              onClick={() => setCurrentFrame(prev => Math.max(0, prev - 1))}
+              title="Previous Frame (←)"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16">
+                <path d="M10 2 L4 8 L10 14" fill="none" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            </button>
+
+            <button
+              className={`playback-btn play-btn ${isPlaying ? 'playing' : ''}`}
+              onClick={() => setIsPlaying(!isPlaying)}
+              title="Play/Pause (Space)"
+            >
+              {isPlaying ? (
+                <svg width="16" height="16" viewBox="0 0 16 16">
+                  <rect x="4" y="2" width="3" height="12" fill="currentColor" />
+                  <rect x="9" y="2" width="3" height="12" fill="currentColor" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 16 16">
+                  <path d="M4 2 L4 14 L12 8 Z" fill="currentColor" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              className="playback-btn"
+              onClick={() => setCurrentFrame(prev => Math.min(totalFrames, prev + 1))}
+              title="Next Frame (→)"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16">
+                <path d="M6 2 L12 8 L6 14" fill="none" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            </button>
+
+            <button
+              className="playback-btn"
+              onClick={() => setCurrentFrame(totalFrames)}
+              title="Go to End (End)"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16">
+                <path d="M2 2 L10 8 L2 14 Z M14 2 L14 14" fill="currentColor" />
+              </svg>
+            </button>
+
+            <button
+              className={`playback-btn ${loopEnabled ? 'active' : ''}`}
+              onClick={() => setLoopEnabled(!loopEnabled)}
+              title="Loop"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16">
+                <path d="M4 6 Q2 6 2 8 Q2 10 4 10 L12 10 Q14 10 14 8 Q14 6 12 6 M12 4 L14 6 L12 8 M4 12 L2 10 L4 8" stroke="currentColor" fill="none" strokeWidth="1.5" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="timeline-info">
+            <span className="timeline-time">{formatTime(currentFrame)} / {formatTime(totalFrames)}</span>
+            <span className="timeline-frame">Frame {Math.round(currentFrame)} / {totalFrames}</span>
+            <span className="timeline-fps">{fps} FPS</span>
+          </div>
+
+          <div className="timeline-controls">
+            <label className="auto-key-toggle">
+              <input
+                type="checkbox"
+                checked={autoKeying}
+                onChange={(e) => setAutoKeying(e.target.checked)}
+              />
+              <span className={`auto-key-label ${autoKeying ? 'active' : ''}`}>Auto-Key</span>
+            </label>
+
+            <button
+              className="zoom-btn"
+              onClick={() => setTimelineZoom(prev => Math.max(0.25, prev - 0.25))}
+            >
+              -
+            </button>
+            <span className="zoom-label">{Math.round(timelineZoom * 100)}%</span>
+            <button
+              className="zoom-btn"
+              onClick={() => setTimelineZoom(prev => Math.min(4, prev + 0.25))}
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        <div className="timeline-content" ref={timelineScrollRef}>
+          <div className="timeline-ruler">
+            {Array.from({ length: Math.ceil(totalFrames / 10) + 1 }, (_, i) => i * 10).map(frame => (
+              <div
+                key={frame}
+                className="timeline-marker"
+                style={{ left: `${frame * timelineZoom}px` }}
+              >
+                <span className="timeline-marker-label">{frame}</span>
+                <div className="timeline-marker-line"></div>
               </div>
             ))}
           </div>
 
-          {/* Timeline Ruler & Keyframes (Scrollable Area) */}
           <div
-            className="flex-1 flex flex-col overflow-x-auto overflow-y-auto relative"
-            ref={timelineScrollRef}
+            className="timeline-playhead"
+            style={{ left: `${currentFrame * timelineZoom}px` }}
+            onMouseDown={(e) => {
+              const startX = e.clientX;
+              const startFrame = currentFrame;
+
+              const handleMove = (e) => {
+                const dx = e.clientX - startX;
+                const frameChange = dx / timelineZoom;
+                const newFrame = Math.max(0, Math.min(totalFrames, startFrame + frameChange));
+                setCurrentFrame(newFrame);
+              };
+
+              const handleUp = () => {
+                document.removeEventListener('mousemove', handleMove);
+                document.removeEventListener('mouseup', handleUp);
+              };
+
+              document.addEventListener('mousemove', handleMove);
+              document.addEventListener('mouseup', handleUp);
+            }}
           >
-            {/* Ruler */}
-            <div
-              className="h-8 border-b border-gray-200 bg-gray-100 relative min-w-full cursor-pointer"
-              style={{ width: `${totalFrames * 20 * timelineScale}px` }}
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const clickX = e.clientX - rect.left;
-                const frame = Math.floor(clickX / (20 * timelineScale));
-                setCurrentFrame(Math.max(0, Math.min(frame, totalFrames)));
-              }}
-            >
-              {/* Ticks */}
-              {Array.from({ length: Math.ceil(totalFrames / 5) }).map((_, i) => {
-                const frameNum = i * 5;
-                const leftPos = frameNum * 20 * timelineScale;
-                return (
-                  <div
-                    key={i}
-                    className="absolute bottom-0 border-l border-gray-400"
-                    style={{
-                      left: `${leftPos}px`,
-                      height: i % 2 === 0 ? '100%' : '50%',
-                    }}
-                  >
-                    {i % 2 === 0 && (
-                      <span className="text-[10px] text-gray-500 ml-1">
-                        {frameNum}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="timeline-playhead-line"></div>
+            <div className="timeline-playhead-handle"></div>
+          </div>
 
-              {/* Playhead (Red Indicator) */}
-              <div
-                className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none"
-                style={{
-                  left: `${currentFrame * 20 * timelineScale}px`,
-                  height: '1000px',
-                }} // Height extends down
-              >
-                <div className="w-3 h-3 bg-red-500 transform -translate-x-1/2 rotate-45 -mt-1.5"></div>
-              </div>
-            </div>
-
-            {/* Keyframe Tracks */}
-            <div
-              className="relative min-w-full"
-              style={{ width: `${totalFrames * 20 * timelineScale}px` }}
-            >
-              {/* Grid Lines */}
-              {Array.from({ length: Math.ceil(totalFrames / 5) }).map((_, i) => (
-                <div
-                  key={`grid-${i}`}
-                  className="absolute top-0 bottom-0 border-l border-gray-100 pointer-events-none"
-                  style={{
-                    left: `${i * 5 * 20 * timelineScale}px`,
-                    height: '100%',
-                  }}
-                />
-              ))}
-
-              {strokes.map((stroke) => (
-                <div
-                  key={stroke.id}
-                  className="h-8 border-b border-gray-100 relative"
-                >
-                  {stroke.keyframes &&
-                    stroke.keyframes.map((kf, kfIndex) => (
-                      <div
-                        key={kfIndex}
-                        className="absolute top-1/2 w-3 h-3 bg-blue-500 transform -translate-y-1/2 -translate-x-1/2 rotate-45 border border-white shadow-sm cursor-pointer hover:bg-blue-600 z-10"
-                        style={{
-                          left: `${kf.frame * 20 * timelineScale}px`,
-                        }}
-                        title={`Keyframe at ${kf.frame}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setCurrentFrame(kf.frame);
-                        }}
-                      ></div>
-                    ))}
+          <div className="timeline-tracks">
+            {objects.map(obj => (
+              <div key={obj.id} className="timeline-track">
+                <div className="timeline-track-header">
+                  <span className="timeline-track-name">{obj.name}</span>
                 </div>
-              ))}
-            </div>
+
+                <div className="timeline-track-content">
+                  {/* Position Keyframes */}
+                  {keyframes[obj.id]?.position?.map((kf, idx) => (
+                    <div
+                      key={`pos-${idx}`}
+                      className="timeline-keyframe"
+                      style={{ left: `${kf.frame * timelineZoom}px` }}
+                      onClick={() => setCurrentFrame(kf.frame)}
+                      title={`Position keyframe at frame ${kf.frame}`}
+                    >
+                      ◆
+                    </div>
+                  ))}
+
+                  {/* Scale Keyframes */}
+                  {keyframes[obj.id]?.scale?.map((kf, idx) => (
+                    <div
+                      key={`scale-${idx}`}
+                      className="timeline-keyframe"
+                      style={{ left: `${kf.frame * timelineZoom}px` }}
+                      onClick={() => setCurrentFrame(kf.frame)}
+                      title={`Scale keyframe at frame ${kf.frame}`}
+                    >
+                      ◆
+                    </div>
+                  ))}
+
+                  {/* Rotation Keyframes */}
+                  {keyframes[obj.id]?.rotation?.map((kf, idx) => (
+                    <div
+                      key={`rot-${idx}`}
+                      className="timeline-keyframe"
+                      style={{ left: `${kf.frame * timelineZoom}px` }}
+                      onClick={() => setCurrentFrame(kf.frame)}
+                      title={`Rotation keyframe at frame ${kf.frame}`}
+                    >
+                      ◆
+                    </div>
+                  ))}
+
+                  {/* Opacity Keyframes */}
+                  {keyframes[obj.id]?.opacity?.map((kf, idx) => (
+                    <div
+                      key={`opacity-${idx}`}
+                      className="timeline-keyframe"
+                      style={{ left: `${kf.frame * timelineZoom}px` }}
+                      onClick={() => setCurrentFrame(kf.frame)}
+                      title={`Opacity keyframe at frame ${kf.frame}`}
+                    >
+                      ◆
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
-      {/* New File Modal */}
-      {showFileModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
-          <div className="bg-white rounded-xl p-6 w-96 shadow-xl">
-            <h2 className="text-xl font-bold mb-4">Create New File</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">File Name</label>
-                <input
-                  type="text"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                  value={newFileDetails.name}
-                  onChange={(e) => setNewFileDetails({ ...newFileDetails, name: e.target.value })}
-                  placeholder="My Awesome Project"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-                <select
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                  value={newFileDetails.type}
-                  onChange={(e) => setNewFileDetails({ ...newFileDetails, type: e.target.value })}
-                >
-                  <option value="icon">Icon Animation</option>
-                  <option value="emoji">Logo, Emoji Creation</option>
-                  <option value="giff">GIF Creation</option>
-                </select>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  onClick={() => setShowFileModal(false)}
-                  className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={createNewFile}
-                  className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg"
-                  disabled={!newFileDetails.name}
-                >
-                  Create
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

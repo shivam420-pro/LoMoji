@@ -1,0 +1,185 @@
+- generic [ref=e149]:
+  - generic [ref=e150]:
+    - generic [ref=e151]:
+      - generic [ref=e154]:
+        - img "Menu item" [ref=e155]
+        - img "Group" [ref=e156]
+      - generic [ref=e159]: "ID: 69861b13..."
+      - generic [ref=e160]:
+        - button "+ New" [ref=e161] [cursor=pointer]:
+          - generic [ref=e162]: +
+          - generic [ref=e163]: New
+        - button "Selection tool" [ref=e165] [cursor=pointer]:
+          - img "Selection tool" [ref=e166]
+        - generic [ref=e328]:
+          - generic [ref=e329]:
+            - generic [ref=e330]: Shapes
+            - generic [ref=e331]:
+              - img [ref=e333]
+              - img [ref=e336]
+              - img [ref=e339]
+              - img [ref=e342]
+              - img [ref=e345]
+              - img [ref=e348]
+              - img [ref=e351]
+              - img [ref=e354]
+              - img [ref=e357]
+              - img [ref=e360]
+              - img [ref=e363]
+              - img [ref=e366]
+          - generic [ref=e368]:
+            - generic [ref=e369]: Emojis
+            - generic [ref=e370]:
+              - generic [ref=e371]: 😀
+              - generic [ref=e372]: 😂
+              - generic [ref=e373]: 😍
+              - generic [ref=e374]: 😎
+              - generic [ref=e375]: 😭
+              - generic [ref=e376]: 😡
+              - generic [ref=e377]: 👍
+              - generic [ref=e378]: 👎
+              - generic [ref=e379]: 🎉
+              - generic [ref=e380]: ❤️
+              - generic [ref=e381]: 🔥
+              - generic [ref=e382]: ✨
+        - button "Rectangle tool" [active] [ref=e167] [cursor=pointer]:
+          - img "Rectangle tool" [ref=e168]
+        - generic [ref=e383]:
+          - generic [ref=e384]:
+            - generic [ref=e385]: Shapes
+            - generic [ref=e386]:
+              - img [ref=e388]
+              - img [ref=e391]
+              - img [ref=e394]
+              - img [ref=e397]
+              - img [ref=e400]
+              - img [ref=e403]
+              - img [ref=e406]
+              - img [ref=e409]
+              - img [ref=e412]
+              - img [ref=e415]
+              - img [ref=e418]
+              - img [ref=e421]
+          - generic [ref=e423]:
+            - generic [ref=e424]: Emojis
+            - generic [ref=e425]:
+              - generic [ref=e426]: 😀
+              - generic [ref=e427]: 😂
+              - generic [ref=e428]: 😍
+              - generic [ref=e429]: 😎
+              - generic [ref=e430]: 😭
+              - generic [ref=e431]: 😡
+              - generic [ref=e432]: 👍
+              - generic [ref=e433]: 👎
+              - generic [ref=e434]: 🎉
+              - generic [ref=e435]: ❤️
+              - generic [ref=e436]: 🔥
+              - generic [ref=e437]: ✨
+        - button "Tool A" [ref=e169] [cursor=pointer]:
+          - img "Tool" [ref=e170]
+        - button "Tool B" [ref=e171] [cursor=pointer]:
+          - img "Tool" [ref=e172]
+        - button "Tool C" [ref=e173] [cursor=pointer]:
+          - img "Import Image" [ref=e174]
+        - button "Tool D" [ref=e175] [cursor=pointer]:
+          - img "Tool" [ref=e176]
+        - generic [ref=e178]:
+          - button "Undo" [ref=e179] [cursor=pointer]:
+            - img [ref=e180]
+          - button "Redo" [ref=e182] [cursor=pointer]:
+            - img [ref=e183]
+        - switch "Animation" [ref=e186] [cursor=pointer]:
+          - generic [ref=e187]: Animation
+    - generic [ref=e191]:
+      - generic [ref=e193]: Share
+      - button "Export" [ref=e194] [cursor=pointer]
+  - generic [ref=e195]:
+    - generic [ref=e196]:
+      - generic [ref=e200]: Artboard 1
+      - generic [ref=e201]: Create a shape to get started.
+    - generic [ref=e206]:
+      - generic [ref=e207]: Artboard
+      - generic [ref=e210]:
+        - generic [ref=e211]:
+          - generic [ref=e212]: Size
+          - generic [ref=e213]:
+            - generic [ref=e214]: "1200"
+            - generic [ref=e215]: "900"
+        - generic [ref=e216]:
+          - generic [ref=e217]: Duration
+          - generic [ref=e218]: 3 s
+      - generic [ref=e220]: Background
+      - generic [ref=e221]:
+        - generic [ref=e222]:
+          - img "Gradient" [ref=e223]
+          - generic [ref=e224]: Transparent
+        - img "Toggle" [ref=e225]
+      - generic [ref=e227]:
+        - generic [ref=e228]:
+          - generic [ref=e229]: Layers
+          - button "Add" [ref=e230] [cursor=pointer]
+        - generic [ref=e232] [cursor=pointer]:
+          - button "👁️" [ref=e233]
+          - textbox [ref=e234]: Artboard 1
+        - generic [ref=e235]: Objects
+  - generic [ref=e237]:
+    - generic [ref=e238]:
+      - generic [ref=e239]:
+        - button "Play" [ref=e240] [cursor=pointer]:
+          - img "Play" [ref=e241]
+        - generic [ref=e242]:
+          - generic [ref=e243]: "0"
+          - generic [ref=e244]: /
+          - generic [ref=e245]: "300"
+          - generic [ref=e246]: f
+        - combobox [ref=e247]:
+          - option "12 FPS"
+          - option "24 FPS"
+          - option "30 FPS" [selected]
+          - option "60 FPS"
+      - generic [ref=e248]:
+        - button "Auto-Key" [ref=e249] [cursor=pointer]: Auto-Key
+        - button "Onion Skin" [ref=e251] [cursor=pointer]
+        - generic [ref=e252]:
+          - button "-" [ref=e253] [cursor=pointer]
+          - generic [ref=e254]: 100%
+          - button "+" [ref=e255] [cursor=pointer]
+    - generic [ref=e256]:
+      - generic [ref=e258]: Master
+      - generic [ref=e260] [cursor=pointer]:
+        - generic [ref=e261]: "0"
+        - generic [ref=e263]: "10"
+        - generic [ref=e265]: "20"
+        - generic [ref=e267]: "30"
+        - generic [ref=e269]: "40"
+        - generic [ref=e271]: "50"
+        - generic [ref=e273]: "60"
+        - generic [ref=e275]: "70"
+        - generic [ref=e277]: "80"
+        - generic [ref=e279]: "90"
+        - generic [ref=e281]: "100"
+        - generic [ref=e283]: "110"
+        - generic [ref=e285]: "120"
+        - generic [ref=e287]: "130"
+        - generic [ref=e289]: "140"
+        - generic [ref=e291]: "150"
+        - generic [ref=e293]: "160"
+        - generic [ref=e295]: "170"
+        - generic [ref=e297]: "180"
+        - generic [ref=e299]: "190"
+        - generic [ref=e301]: "200"
+        - generic [ref=e303]: "210"
+        - generic [ref=e305]: "220"
+        - generic [ref=e307]: "230"
+        - generic [ref=e309]: "240"
+        - generic [ref=e311]: "250"
+        - generic [ref=e313]: "260"
+        - generic [ref=e315]: "270"
+        - generic [ref=e317]: "280"
+        - generic [ref=e319]: "290"
+  - generic [ref=e321]:
+    - generic [ref=e322]:
+      - heading "Layers (0)" [level=3] [ref=e323]
+      - button "✕" [ref=e324] [cursor=pointer]
+    - generic [ref=e326]: No objects yet. Add shapes, text, or images to see them here.
+    - generic [ref=e327]: 💾 Auto-save enabled

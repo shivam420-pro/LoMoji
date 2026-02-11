@@ -2,7 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
-import { User, createUserActivityModel, UserFileActivity, GmailData, UserSession, UserFile } from './src/models/index.js';
+import { User, createUserActivityModel, UserFileActivity, GmailData, UserSession, UserFile, CanvasProject } from './src/models/index.js';
 
 const app = express();
 app.use(express.json());
@@ -436,6 +436,145 @@ app.delete('/api/user/:email/file', async (req, res) => {
     return res.json({ message: 'File deleted' });
   } catch (err) {
     return res.status(500).json({ error: 'Error deleting file', details: err.message });
+  }
+});
+
+// ========================================
+// CANVAS PROJECT ENDPOINTS
+// ========================================
+
+// --- API: Save a canvas project ---
+app.post('/api/canvas/project', async (req, res) => {
+  try {
+    const {
+      userId,
+      email,
+      projectName,
+      projectId,
+      canvasWidth,
+      canvasHeight,
+      backgroundColor,
+      elements,
+      duration,
+      fps,
+      currentFrame,
+      loop,
+      autoKey,
+      thumbnail
+    } = req.body;
+
+    if (!userId || !email || !projectName || !projectId) {
+      return res.status(400).json({ error: 'userId, email, projectName, and projectId are required' });
+    }
+
+    if (!userMongoConnected) {
+      return res.status(503).json({ error: 'MongoDB not connected' });
+    }
+
+    // Check if project already exists
+    let project = await CanvasProject.findOne({ projectId });
+
+    if (project) {
+      // Update existing project
+      project.projectName = projectName;
+      project.canvasWidth = canvasWidth || 800;
+      project.canvasHeight = canvasHeight || 600;
+      project.backgroundColor = backgroundColor || '#ffffff';
+      project.elements = elements || [];
+      project.duration = duration || 10;
+      project.fps = fps || 30;
+      project.currentFrame = currentFrame || 0;
+      project.loop = loop || false;
+      project.autoKey = autoKey || false;
+      project.thumbnail = thumbnail;
+      await project.save();
+      return res.json({ message: 'Project updated successfully', project });
+    } else {
+      // Create new project
+      project = new CanvasProject({
+        userId,
+        email,
+        projectName,
+        projectId,
+        canvasWidth: canvasWidth || 800,
+        canvasHeight: canvasHeight || 600,
+        backgroundColor: backgroundColor || '#ffffff',
+        elements: elements || [],
+        duration: duration || 10,
+        fps: fps || 30,
+        currentFrame: currentFrame || 0,
+        loop: loop || false,
+        autoKey: autoKey || false,
+        thumbnail
+      });
+      await project.save();
+      return res.status(201).json({ message: 'Project saved successfully', project });
+    }
+  } catch (err) {
+    console.error('Error saving canvas project:', err);
+    return res.status(500).json({ error: 'Error saving canvas project', details: err.message });
+  }
+});
+
+// --- API: Get a canvas project by projectId ---
+app.get('/api/canvas/project/:projectId', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    if (!userMongoConnected) {
+      return res.status(503).json({ error: 'MongoDB not connected' });
+    }
+
+    const project = await CanvasProject.findOne({ projectId });
+
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    return res.json({ project });
+  } catch (err) {
+    console.error('Error fetching canvas project:', err);
+    return res.status(500).json({ error: 'Error fetching canvas project', details: err.message });
+  }
+});
+
+// --- API: Get all projects for a user (by email) ---
+app.get('/api/canvas/projects/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    if (!userMongoConnected) {
+      return res.status(503).json({ error: 'MongoDB not connected' });
+    }
+
+    const projects = await CanvasProject.find({ email }).sort({ lastModified: -1 });
+
+    return res.json({ projects });
+  } catch (err) {
+    console.error('Error fetching canvas projects:', err);
+    return res.status(500).json({ error: 'Error fetching canvas projects', details: err.message });
+  }
+});
+
+// --- API: Delete a canvas project ---
+app.delete('/api/canvas/project/:projectId', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    if (!userMongoConnected) {
+      return res.status(503).json({ error: 'MongoDB not connected' });
+    }
+
+    const result = await CanvasProject.deleteOne({ projectId });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    return res.json({ message: 'Project deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting canvas project:', err);
+    return res.status(500).json({ error: 'Error deleting canvas project', details: err.message });
   }
 });
 
