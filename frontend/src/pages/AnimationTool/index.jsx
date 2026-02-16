@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import './AnimationTool.css';
 import AssetsPanel from './AssetsPanel';
+import UnifiedPresetsPanel from './UnifiedPresetsPanel';
 import TextAssetsPanel from './TextAssetsPanel';
 import AnimationPresetsDialog from './AnimationPresetsDialog';
 import AnimationAssetsPanel from './AnimationAssetsPanel';
@@ -84,6 +85,29 @@ const AnimationTool = () => {
 
   // Properties Panel Tab State
   const [propertiesPanelTab, setPropertiesPanelTab] = useState('properties'); // 'properties' or 'animation'
+
+  // Drawing Tools State
+  const [brushSize, setBrushSize] = useState(5);
+  const [brushColor, setBrushColor] = useState('#000000');
+  const [eraserSize, setEraserSize] = useState(20);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [currentPath, setCurrentPath] = useState([]);
+  const [showBrushProperties, setShowBrushProperties] = useState(false);
+  const brushPropertiesRef = useRef(null);
+
+  // File Upload & Drag-Drop State
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [uploadedImages, setUploadedImages] = useState([]);
+  const fileInputRef = useRef(null);
+  const [showBackgroundRemoval, setShowBackgroundRemoval] = useState(false);
+  const [processingBgRemoval, setProcessingBgRemoval] = useState(false);
+
+  // Border Preset State
+  const [showBorderPresets, setShowBorderPresets] = useState(false);
+  const [borderStyle, setBorderStyle] = useState('solid');
+  const [borderWidth, setBorderWidth] = useState(2);
+  const [borderColor, setBorderColor] = useState('#000000');
+  const [borderRadius, setBorderRadius] = useState(0);
 
   // ===============================================
   // KEYFRAME INTERPOLATION ENGINE
@@ -288,6 +312,189 @@ const AnimationTool = () => {
       setSelectedObjectIds([newObj.id]);
     }
   }, [objects]);
+
+  // ===============================================
+  // FILE UPLOAD & IMAGE HANDLING
+  // ===============================================
+
+  const handleFileUpload = useCallback((files) => {
+    Array.from(files).forEach(file => {
+      const fileType = file.type;
+
+      if (fileType.startsWith('image/')) {
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            // Create image object on canvas
+            const canvas = canvasRef.current;
+            const maxWidth = canvas.width * 0.5;
+            const maxHeight = canvas.height * 0.5;
+
+            let width = img.width;
+            let height = img.height;
+
+            // Scale down if too large
+            if (width > maxWidth || height > maxHeight) {
+              const ratio = Math.min(maxWidth / width, maxHeight / height);
+              width = width * ratio;
+              height = height * ratio;
+            }
+
+            const imageObj = {
+              id: Date.now() + Math.random(),
+              type: 'image',
+              name: file.name,
+              x: canvas.width / 2,
+              y: canvas.height / 2,
+              width,
+              height,
+              rotation: 0,
+              opacity: 1,
+              visible: true,
+              locked: false,
+              imageSrc: e.target.result,
+              originalFile: file.name,
+              fill: 'transparent',
+              stroke: 'transparent',
+              strokeWidth: 0
+            };
+
+            setObjects(prev => [...prev, imageObj]);
+            setUploadedImages(prev => [...prev, e.target.result]);
+            setSelectedObjectIds([imageObj.id]);
+          };
+          img.src = e.target.result;
+        };
+
+        reader.readAsDataURL(file);
+      } else if (fileType === 'image/svg+xml' || file.name.endsWith('.svg')) {
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+          const canvas = canvasRef.current;
+          const svgObj = {
+            id: Date.now() + Math.random(),
+            type: 'svg',
+            name: file.name,
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            width: 200,
+            height: 200,
+            rotation: 0,
+            opacity: 1,
+            visible: true,
+            locked: false,
+            svgContent: e.target.result,
+            originalFile: file.name,
+            fill: 'transparent',
+            stroke: 'transparent',
+            strokeWidth: 0
+          };
+
+          setObjects(prev => [...prev, svgObj]);
+          setSelectedObjectIds([svgObj.id]);
+        };
+
+        reader.readAsText(file);
+      }
+    });
+  }, [objects]);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      handleFileUpload(files);
+    }
+  }, [handleFileUpload]);
+
+  const handleFileInputChange = useCallback((e) => {
+    const files = e.target.files;
+    if (files.length > 0) {
+      handleFileUpload(files);
+    }
+  }, [handleFileUpload]);
+
+  // Background Removal using Remove.bg API (or client-side alternative)
+  const handleBackgroundRemoval = useCallback(async () => {
+    if (selectedObjectIds.length === 0) {
+      alert('Please select an image to remove background');
+      return;
+    }
+
+    const selectedObj = objects.find(o => o.id === selectedObjectIds[0]);
+    if (!selectedObj || selectedObj.type !== 'image') {
+      alert('Please select an image object');
+      return;
+    }
+
+    setProcessingBgRemoval(true);
+
+    try {
+      // For demo purposes, we'll use a simple client-side approach
+      // In production, you'd use Remove.bg API or similar service
+
+      // Create a canvas to process the image
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+
+      const img = new Image();
+      img.onload = () => {
+        tempCanvas.width = img.width;
+        tempCanvas.height = img.height;
+        tempCtx.drawImage(img, 0, 0);
+
+        // Get image data
+        const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        const data = imageData.data;
+
+        // Simple background removal: Remove white/light colored pixels
+        // This is a basic implementation - for production use Remove.bg API
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          // If pixel is close to white, make it transparent
+          if (r > 200 && g > 200 && b > 200) {
+            data[i + 3] = 0; // Set alpha to 0
+          }
+        }
+
+        tempCtx.putImageData(imageData, 0, 0);
+        const processedImage = tempCanvas.toDataURL('image/png');
+
+        // Update the object with processed image
+        updateObject(selectedObj.id, { imageSrc: processedImage });
+
+        setProcessingBgRemoval(false);
+        alert('Background removed! (Basic removal - for better results, integrate Remove.bg API)');
+      };
+
+      img.src = selectedObj.imageSrc;
+    } catch (error) {
+      console.error('Error removing background:', error);
+      alert('Error removing background. Please try again.');
+      setProcessingBgRemoval(false);
+    }
+  }, [selectedObjectIds, objects, updateObject]);
 
   // ===============================================
   // ANIMATION PRESETS HANDLING
@@ -578,6 +785,58 @@ const AnimationTool = () => {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(obj.text || 'Text', 0, 0);
+      } else if (obj.type === 'path' || obj.type === 'pencil' || obj.type === 'pen') {
+        // Draw path for pencil/pen drawings
+        if (obj.points && obj.points.length > 1) {
+          ctx.beginPath();
+          ctx.strokeStyle = obj.stroke || obj.fill || '#000000';
+          ctx.lineWidth = obj.strokeWidth || 2;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+
+          // Move to first point (offset by position)
+          const firstPoint = obj.points[0];
+          ctx.moveTo(firstPoint.x - position.x, firstPoint.y - position.y);
+
+          // Draw lines to subsequent points
+          for (let i = 1; i < obj.points.length; i++) {
+            const point = obj.points[i];
+            ctx.lineTo(point.x - position.x, point.y - position.y);
+          }
+
+          ctx.stroke();
+        }
+      } else if (obj.type === 'image') {
+        // Draw uploaded image
+        if (obj.imageSrc) {
+          const img = new Image();
+          img.src = obj.imageSrc;
+          if (img.complete) {
+            ctx.drawImage(img, -scale.width / 2, -scale.height / 2, scale.width, scale.height);
+          } else {
+            img.onload = () => {
+              renderFrame(frame);
+            };
+          }
+        }
+      } else if (obj.type === 'svg') {
+        // Draw SVG content
+        if (obj.svgContent) {
+          const svgBlob = new Blob([obj.svgContent], { type: 'image/svg+xml;charset=utf-8' });
+          const url = URL.createObjectURL(svgBlob);
+          const img = new Image();
+          img.src = url;
+          if (img.complete) {
+            ctx.drawImage(img, -scale.width / 2, -scale.height / 2, scale.width, scale.height);
+            URL.revokeObjectURL(url);
+          } else {
+            img.onload = () => {
+              ctx.drawImage(img, -scale.width / 2, -scale.height / 2, scale.width, scale.height);
+              URL.revokeObjectURL(url);
+              renderFrame(frame);
+            };
+          }
+        }
       }
 
       // Draw selection handles if selected
@@ -609,8 +868,25 @@ const AnimationTool = () => {
       ctx.restore();
     });
 
+    // Draw current drawing path (preview)
+    if (isDrawing && currentPath.length > 0 && (selectedTool === 'pencil' || selectedTool === 'pen')) {
+      ctx.beginPath();
+      ctx.strokeStyle = brushColor;
+      ctx.lineWidth = brushSize;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.globalAlpha = 0.8;
+
+      ctx.moveTo(currentPath[0].x, currentPath[0].y);
+      for (let i = 1; i < currentPath.length; i++) {
+        ctx.lineTo(currentPath[i].x, currentPath[i].y);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
     ctx.restore();
-  }, [objects, selectedObjectIds, getInterpolatedValue, canvasOffset, isPlaying]);
+  }, [objects, selectedObjectIds, getInterpolatedValue, canvasOffset, isPlaying, isDrawing, currentPath, selectedTool, brushColor, brushSize]);
 
   // ===============================================
   // CANVAS INTERACTION
@@ -726,6 +1002,30 @@ const AnimationTool = () => {
       }
     }
 
+    // Drawing tools (pencil, pen, eraser)
+    if (selectedTool === 'pencil' || selectedTool === 'pen') {
+      setIsDrawing(true);
+      setCurrentPath([point]);
+      setInteractionMode('freeDrawing');
+      return;
+    }
+
+    if (selectedTool === 'eraser') {
+      setIsDrawing(true);
+      setInteractionMode('erasing');
+      return;
+    }
+
+    if (selectedTool === 'bucket') {
+      // Bucket fill tool - fill clicked object
+      const clickedObj = getObjectAtPoint(point.x, point.y);
+      if (clickedObj) {
+        updateObject(clickedObj.id, { fill: brushColor });
+        saveHistory(objects);
+      }
+      return;
+    }
+
     if (selectedTool === 'draw') {
       // Start drawing artboard
       setInteractionMode('drawing');
@@ -773,12 +1073,65 @@ const AnimationTool = () => {
 
         updateObject(id, updates);
       });
+    } else if (interactionMode === 'freeDrawing' && isDrawing) {
+      // Add points to current path for pencil/pen tool
+      const point = getCanvasPoint(e);
+      setCurrentPath(prev => [...prev, point]);
+    } else if (interactionMode === 'erasing' && isDrawing) {
+      // Erase objects at current point
+      const point = getCanvasPoint(e);
+      const objToErase = getObjectAtPoint(point.x, point.y);
+      if (objToErase) {
+        deleteObject(objToErase.id);
+      }
     } else if (interactionMode === 'drawing' && dragStart) {
       // Drawing artboard preview (will be handled in render)
     }
   };
 
   const handleCanvasMouseUp = (e) => {
+    // Finish free drawing (pencil/pen)
+    if (interactionMode === 'freeDrawing' && isDrawing && currentPath.length > 1) {
+      // Calculate bounding box for the path
+      let minX = currentPath[0].x;
+      let minY = currentPath[0].y;
+      let maxX = currentPath[0].x;
+      let maxY = currentPath[0].y;
+
+      currentPath.forEach(point => {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      });
+
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+
+      // Create path object
+      addObject(selectedTool, {
+        x: centerX,
+        y: centerY,
+        width: maxX - minX,
+        height: maxY - minY,
+        points: currentPath,
+        stroke: brushColor,
+        strokeWidth: brushSize,
+        fill: 'transparent',
+        name: `${selectedTool.charAt(0).toUpperCase() + selectedTool.slice(1)} Drawing`
+      });
+
+      setIsDrawing(false);
+      setCurrentPath([]);
+      setInteractionMode('idle');
+    }
+
+    if (interactionMode === 'erasing') {
+      setIsDrawing(false);
+      setInteractionMode('idle');
+      saveHistory(objects);
+    }
+
     if (interactionMode === 'moving' && transformStart) {
       saveHistory(objects);
     }
@@ -991,6 +1344,22 @@ const AnimationTool = () => {
         e.preventDefault();
         setSelectedTool('draw');
       }
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        setSelectedTool('pencil');
+      }
+      if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        setSelectedTool('pen');
+      }
+      if (e.key === 'b' || e.key === 'B') {
+        e.preventDefault();
+        setSelectedTool('bucket');
+      }
+      if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        setSelectedTool('eraser');
+      }
 
       // Keyframes (only when objects are selected)
       if ((e.key === 'k' || e.key === 'K') && selectedObjectIds.length > 0) {
@@ -1047,11 +1416,18 @@ const AnimationTool = () => {
       if (showToolPopup && toolPopupRef.current && !toolPopupRef.current.contains(e.target)) {
         setShowToolPopup(false);
       }
+      if (showBrushProperties && brushPropertiesRef.current && !brushPropertiesRef.current.contains(e.target)) {
+        // Check if click is not on a tool button
+        const isToolButton = e.target.closest('.tool-btn');
+        if (!isToolButton) {
+          setShowBrushProperties(false);
+        }
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showToolPopup]);
+  }, [showToolPopup, showBrushProperties]);
 
   // ===============================================
   // UI HELPER FUNCTIONS
@@ -1080,7 +1456,11 @@ const AnimationTool = () => {
       {/* Top Toolbar */}
       <div className="toolbar">
         <div className="toolbar-left">
-          <div className="logo">LoMoji</div>
+          <img
+            src="/images/img_logo.svg"
+            alt="LoMoji Logo"
+            className="logo-img"
+          />
           <input
             type="text"
             className="file-name-input"
@@ -1210,6 +1590,279 @@ const AnimationTool = () => {
 
           <div className="tool-divider"></div>
 
+          {/* Drawing Tools */}
+          <div className="tool-group" style={{ position: 'relative' }}>
+            <button
+              className={`tool-btn ${selectedTool === 'pencil' ? 'active' : ''}`}
+              onClick={() => {
+                setSelectedTool('pencil');
+                setShowBrushProperties(true);
+              }}
+              title="Pencil Tool (P)"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <path d="M14 2 L18 6 L7 17 L3 18 L4 14 Z M11 5 L15 9" stroke="currentColor" strokeWidth="2" fill="none" />
+              </svg>
+            </button>
+
+            <button
+              className={`tool-btn ${selectedTool === 'pen' ? 'active' : ''}`}
+              onClick={() => {
+                setSelectedTool('pen');
+                setShowBrushProperties(true);
+              }}
+              title="Pen Tool (N)"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <path d="M3 17 L3 13 L13 3 L17 7 L7 17 Z M10 6 L14 10" stroke="currentColor" strokeWidth="2" fill="none" />
+              </svg>
+            </button>
+
+            <button
+              className={`tool-btn ${selectedTool === 'bucket' ? 'active' : ''}`}
+              onClick={() => {
+                setSelectedTool('bucket');
+                setShowBrushProperties(true);
+              }}
+              title="Bucket Fill Tool (B)"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <path d="M2 12 L8 6 L12 10 L6 16 Z M8 6 L12 2 L14 4 M14 12 Q16 12 16 14 Q16 16 14 16 Q12 16 12 14 Q12 12 14 12" stroke="currentColor" strokeWidth="1.5" fill="none" />
+              </svg>
+            </button>
+
+            <button
+              className={`tool-btn ${selectedTool === 'eraser' ? 'active' : ''}`}
+              onClick={() => {
+                setSelectedTool('eraser');
+                setShowBrushProperties(true);
+              }}
+              title="Eraser Tool (E)"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <path d="M8 18 L18 18 M4 10 L10 4 L16 10 L10 16 Z" stroke="currentColor" strokeWidth="2" fill="none" />
+              </svg>
+            </button>
+
+            <button
+              className={`tool-btn ${selectedTool === 'bgremove' ? 'active' : ''}`}
+              onClick={() => {
+                setSelectedTool('bgremove');
+                handleBackgroundRemoval();
+              }}
+              disabled={!selectedObject || selectedObject.type !== 'image'}
+              title="Remove Background (Select an image)"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <rect x="2" y="2" width="16" height="16" stroke="currentColor" strokeWidth="1.5" fill="none" strokeDasharray="2,2"/>
+                <circle cx="10" cy="10" r="4" fill="currentColor"/>
+              </svg>
+            </button>
+
+            {/* Brush Properties Popup */}
+            {showBrushProperties && (selectedTool === 'pencil' || selectedTool === 'pen' || selectedTool === 'bucket' || selectedTool === 'eraser') && (
+              <div ref={brushPropertiesRef} className="brush-properties-popup">
+                <div className="brush-properties-header">
+                  <h4>Tool Properties</h4>
+                  <button
+                    className="brush-close-btn"
+                    onClick={() => setShowBrushProperties(false)}
+                  >×</button>
+                </div>
+
+                {(selectedTool === 'pencil' || selectedTool === 'pen' || selectedTool === 'bucket') && (
+                  <div className="brush-property">
+                    <label>Color</label>
+                    <input
+                      type="color"
+                      value={brushColor}
+                      onChange={(e) => setBrushColor(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                {(selectedTool === 'pencil' || selectedTool === 'pen') && (
+                  <div className="brush-property">
+                    <label>Brush Size: {brushSize}px</label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="50"
+                      value={brushSize}
+                      onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                    />
+                  </div>
+                )}
+
+                {selectedTool === 'eraser' && (
+                  <div className="brush-property">
+                    <label>Eraser Size: {eraserSize}px</label>
+                    <input
+                      type="range"
+                      min="5"
+                      max="100"
+                      value={eraserSize}
+                      onChange={(e) => setEraserSize(parseInt(e.target.value))}
+                    />
+                  </div>
+                )}
+
+                {/* Border Preset Section */}
+                <div className="brush-property" style={{ borderTop: '1px solid #3a3a3a', paddingTop: '12px', marginTop: '12px' }}>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => setShowBorderPresets(!showBorderPresets)}
+                    style={{ width: '100%', padding: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 20 20">
+                      <rect x="3" y="3" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeDasharray="2,2"/>
+                    </svg>
+                    Border Presets
+                  </button>
+                </div>
+
+                {/* Border Presets Popup */}
+                {showBorderPresets && (
+                  <div className="border-presets-section" style={{ marginTop: '12px', padding: '12px', background: '#1a1a1a', borderRadius: '6px' }}>
+                    <h5 style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#999', textTransform: 'uppercase' }}>Border Settings</h5>
+
+                    <div className="brush-property">
+                      <label>Border Style</label>
+                      <select
+                        value={borderStyle}
+                        onChange={(e) => setBorderStyle(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '8px',
+                          background: '#333',
+                          border: '1px solid #444',
+                          borderRadius: '6px',
+                          color: '#e0e0e0',
+                          fontSize: '13px'
+                        }}
+                      >
+                        <option value="solid">Solid</option>
+                        <option value="dashed">Dashed</option>
+                        <option value="dotted">Dotted</option>
+                        <option value="double">Double</option>
+                      </select>
+                    </div>
+
+                    <div className="brush-property">
+                      <label>Border Width: {borderWidth}px</label>
+                      <input
+                        type="range"
+                        min="1"
+                        max="20"
+                        value={borderWidth}
+                        onChange={(e) => setBorderWidth(parseInt(e.target.value))}
+                      />
+                    </div>
+
+                    <div className="brush-property">
+                      <label>Border Color</label>
+                      <input
+                        type="color"
+                        value={borderColor}
+                        onChange={(e) => setBorderColor(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="brush-property">
+                      <label>Border Radius: {borderRadius}px</label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="50"
+                        value={borderRadius}
+                        onChange={(e) => setBorderRadius(parseInt(e.target.value))}
+                      />
+                    </div>
+
+                    <button
+                      className="btn-primary"
+                      onClick={() => {
+                        if (selectedObjectIds.length > 0) {
+                          selectedObjectIds.forEach(id => {
+                            updateObject(id, {
+                              stroke: borderColor,
+                              strokeWidth: borderWidth,
+                              borderStyle: borderStyle,
+                              borderRadius: borderRadius
+                            });
+                          });
+                          alert('Border applied to selected object(s)!');
+                        } else {
+                          alert('Please select an object first');
+                        }
+                      }}
+                      style={{ width: '100%', marginTop: '8px', padding: '8px', fontSize: '13px' }}
+                    >
+                      Apply Border
+                    </button>
+
+                    {/* Quick Border Presets */}
+                    <div style={{ marginTop: '12px' }}>
+                      <label style={{ display: 'block', fontSize: '11px', color: '#888', marginBottom: '8px' }}>Quick Presets</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => {
+                            setBorderStyle('solid');
+                            setBorderWidth(2);
+                            setBorderColor('#000000');
+                            setBorderRadius(0);
+                          }}
+                          style={{ padding: '6px', fontSize: '11px' }}
+                        >
+                          Classic
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => {
+                            setBorderStyle('dashed');
+                            setBorderWidth(3);
+                            setBorderColor('#6366f1');
+                            setBorderRadius(8);
+                          }}
+                          style={{ padding: '6px', fontSize: '11px' }}
+                        >
+                          Modern
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => {
+                            setBorderStyle('dotted');
+                            setBorderWidth(4);
+                            setBorderColor('#ef4444');
+                            setBorderRadius(50);
+                          }}
+                          style={{ padding: '6px', fontSize: '11px' }}
+                        >
+                          Rounded
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => {
+                            setBorderStyle('double');
+                            setBorderWidth(6);
+                            setBorderColor('#10b981');
+                            setBorderRadius(0);
+                          }}
+                          style={{ padding: '6px', fontSize: '11px' }}
+                        >
+                          Bold
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="tool-divider"></div>
+
           <div className="tool-group">
             <button
               className="tool-btn"
@@ -1235,6 +1888,24 @@ const AnimationTool = () => {
         </div>
 
         <div className="toolbar-right">
+          {/* File Upload Button */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,.svg"
+            multiple
+            style={{ display: 'none' }}
+            onChange={handleFileInputChange}
+          />
+          <button
+            className="btn-secondary"
+            onClick={() => fileInputRef.current?.click()}
+            title="Upload Image/SVG"
+            style={{ marginRight: '10px' }}
+          >
+            📁 Upload
+          </button>
+
           <button
             className="btn-primary"
             onClick={saveProject}
@@ -1260,60 +1931,25 @@ const AnimationTool = () => {
             📁
           </button>
 
+          {/* Unified Presets Button (Shapes, Icons, Emojis, Arrows, Symbols, Logos) */}
           <button
-            className={`icon-sidebar-btn ${leftPanelView === 'shapes' ? 'active' : ''}`}
-            onClick={() => {
-              setLeftPanelView('assets');
-              setSelectedAssetCategory('shapes');
+            className={`icon-sidebar-btn ${leftPanelView === 'assets' ? 'active' : ''}`}
+            onClick={() => setLeftPanelView('assets')}
+            data-tooltip="All Presets"
+            style={{
+              background: leftPanelView === 'assets' ? '#6366f1' : 'transparent'
             }}
-            data-tooltip="Shapes"
           >
-            ▭
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="14" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/>
+            </svg>
           </button>
 
-          <button
-            className={`icon-sidebar-btn ${leftPanelView === 'icons' ? 'active' : ''}`}
-            onClick={() => {
-              setLeftPanelView('assets');
-              setSelectedAssetCategory('icons');
-            }}
-            data-tooltip="Icons"
-          >
-            🔧
-          </button>
+          <div className="icon-sidebar-divider"></div>
 
-          <button
-            className={`icon-sidebar-btn ${leftPanelView === 'emojis' ? 'active' : ''}`}
-            onClick={() => {
-              setLeftPanelView('assets');
-              setSelectedAssetCategory('emojis');
-            }}
-            data-tooltip="Emojis"
-          >
-            😀
-          </button>
-
-          <button
-            className={`icon-sidebar-btn ${leftPanelView === 'arrows' ? 'active' : ''}`}
-            onClick={() => {
-              setLeftPanelView('assets');
-              setSelectedAssetCategory('arrows');
-            }}
-            data-tooltip="Arrows"
-          >
-            ➡️
-          </button>
-
-          <button
-            className={`icon-sidebar-btn ${leftPanelView === 'symbols' ? 'active' : ''}`}
-            onClick={() => {
-              setLeftPanelView('assets');
-              setSelectedAssetCategory('symbols');
-            }}
-            data-tooltip="Symbols"
-          >
-            ✨
-          </button>
           <button
             className={`icon-sidebar-btn ${leftPanelView === 'text' ? 'active' : ''}`}
             onClick={() => setLeftPanelView('text')}
@@ -1474,13 +2110,9 @@ const AnimationTool = () => {
           </div>
         )}
 
-        {/* Assets Panel */}
+        {/* Unified Presets Panel */}
         {leftPanelView === 'assets' && (
-          <AssetsPanel
-            selectedCategory={selectedAssetCategory}
-            setSelectedCategory={setSelectedAssetCategory}
-            searchQuery={assetSearchQuery}
-            setSearchQuery={setAssetSearchQuery}
+          <UnifiedPresetsPanel
             onAssetClick={(asset) => {
               // Add asset to canvas
               if (asset.type === 'emoji') {
@@ -1529,7 +2161,12 @@ const AnimationTool = () => {
         )}
 
         {/* Canvas */}
-        <div className="canvas-container">
+        <div
+          className="canvas-container"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           <canvas
             ref={canvasRef}
             width={1200}
@@ -1541,6 +2178,17 @@ const AnimationTool = () => {
             onMouseLeave={handleCanvasMouseUp}
             onDoubleClick={handleCanvasDoubleClick}
           />
+
+          {/* Drag & Drop Overlay */}
+          {isDraggingFile && (
+            <div className="drag-drop-overlay">
+              <div className="drag-drop-content">
+                <div className="drag-drop-icon">📁</div>
+                <div className="drag-drop-text">Drop your images/SVG here</div>
+                <div className="drag-drop-hint">Supports: PNG, JPG, GIF, SVG</div>
+              </div>
+            </div>
+          )}
 
           {/* Text Input Overlay */}
           {editingTextId && (
@@ -1572,7 +2220,7 @@ const AnimationTool = () => {
         </div>
 
         {/* Properties Panel */}
-        {showPropertiesPanel && selectedObject && (
+        {showPropertiesPanel && (
           <div className="properties-panel panel">
             <div className="panel-header">
               <h3>Properties</h3>
@@ -1599,8 +2247,17 @@ const AnimationTool = () => {
             </div>
 
             <div className="properties-content">
+              {/* No Object Selected State */}
+              {!selectedObject && (
+                <div className="empty-state">
+                  <div className="empty-state-icon">🎯</div>
+                  <div className="empty-state-text">No object selected</div>
+                  <div className="empty-state-hint">Select an object on the canvas to edit its properties</div>
+                </div>
+              )}
+
               {/* Properties Tab Content */}
-              {propertiesPanelTab === 'properties' && (
+              {selectedObject && propertiesPanelTab === 'properties' && (
                 <>
                   <div className="property-group">
                     <label>Name</label>
@@ -1776,7 +2433,7 @@ const AnimationTool = () => {
               )}
 
               {/* Animation Tab Content */}
-              {propertiesPanelTab === 'animation' && (
+              {selectedObject && propertiesPanelTab === 'animation' && (
                 <>
                   <div className="property-group">
                     <label>Add Animation</label>

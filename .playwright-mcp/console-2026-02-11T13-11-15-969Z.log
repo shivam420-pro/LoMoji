@@ -1,0 +1,56 @@
+[      45ms] [ERROR] WebSocket connection to 'wss://localhost/?token=4eMYQAa1RFhN' failed: Error in connection establishment: net::ERR_CERT_COMMON_NAME_INVALID @ http://localhost:5173/@vite/client:744
+[      95ms] Error: WebSocket closed without opened.
+    at WebSocket.<anonymous> (http://localhost:5173/@vite/client:423:30)
+[      88ms] [WARNING] ⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition. @ https://static.rocket.new/rocket-web.js?_cfg=https%3A%2F%2Fsangamsa9601back.builtwithrocket.new&_be=https%3A%2F%2Fapplication.rocket.new&_v=0.1.5:0
+[      88ms] [WARNING] ⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath. @ https://static.rocket.new/rocket-web.js?_cfg=https%3A%2F%2Fsangamsa9601back.builtwithrocket.new&_be=https%3A%2F%2Fapplication.rocket.new&_v=0.1.5:0
+[     168ms] ReferenceError: Cannot access 'saveHistory' before initialization
+    at AnimationTool (http://localhost:5173/src/pages/AnimationTool/index.jsx:473:39)
+    at renderWithHooks (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:11596:26)
+    at mountIndeterminateComponent (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:14974:21)
+    at beginWork (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:15962:22)
+    at HTMLUnknownElement.callCallback2 (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:3680:22)
+    at Object.invokeGuardedCallbackDev (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:3705:24)
+    at invokeGuardedCallback (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:3739:39)
+    at beginWork$1 (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19818:15)
+    at performUnitOfWork (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19251:20)
+    at workLoopSync (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19190:13)
+[     169ms] ReferenceError: Cannot access 'saveHistory' before initialization
+    at AnimationTool (http://localhost:5173/src/pages/AnimationTool/index.jsx:473:39)
+    at renderWithHooks (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:11596:26)
+    at mountIndeterminateComponent (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:14974:21)
+    at beginWork (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:15962:22)
+    at HTMLUnknownElement.callCallback2 (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:3680:22)
+    at Object.invokeGuardedCallbackDev (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:3705:24)
+    at invokeGuardedCallback (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:3739:39)
+    at beginWork$1 (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19818:15)
+    at performUnitOfWork (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19251:20)
+    at workLoopSync (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19190:13)
+[     170ms] ReferenceError: Cannot access 'saveHistory' before initialization
+    at AnimationTool (http://localhost:5173/src/pages/AnimationTool/index.jsx:473:39)
+    at renderWithHooks (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:11596:26)
+    at mountIndeterminateComponent (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:14974:21)
+    at beginWork (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:15962:22)
+    at beginWork$1 (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19806:22)
+    at performUnitOfWork (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19251:20)
+    at workLoopSync (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19190:13)
+    at renderRootSync (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:19169:15)
+    at recoverFromConcurrentError (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:18786:28)
+    at performConcurrentWorkOnRoot (http://localhost:5173/node_modules/.vite/deps/chunk-CJSRII5H.js?v=65e06c1b:18734:30)
+[     129ms] [ERROR] Manifest: Line: 1, column: 1, Syntax error. @ http://localhost:5173/Main_Logo.svg:0
+[     146ms] [ERROR] [vite] failed to connect to websocket (Error: WebSocket closed without opened.).  @ https://static.rocket.new/rocket-web.js?_cfg=https%3A%2F%2Fsangamsa9601back.builtwithrocket.new&_be=https%3A%2F%2Fapplication.rocket.new&_v=0.1.5:0
+[     209ms] [ERROR] The above error occurred in the <AnimationTool> component:
+
+    at AnimationTool (http://localhost:5173/src/pages/AnimationTool/index.jsx:36:27)
+    at ProtectedRoute (http://localhost:5173/src/components/common/ProtectedRoute.jsx:21:27)
+    at RenderedRoute (http://localhost:5173/node_modules/.vite/deps/react-router-dom.js?v=65e06c1b:4130:5)
+    at Routes (http://localhost:5173/node_modules/.vite/deps/react-router-dom.js?v=65e06c1b:4600:5)
+    at AppRoutes (http://localhost:5173/src/Routes.jsx:34:40)
+    at AuthProvider (http://localhost:5173/src/contexts/AuthContext.jsx:31:32)
+    at Router (http://localhost:5173/node_modules/.vite/deps/react-router-dom.js?v=65e06c1b:4543:15)
+    at BrowserRouter (http://localhost:5173/node_modules/.vite/deps/react-router-dom.js?v=65e06c1b:5289:5)
+    at App
+    at ToastProvider (http://localhost:5173/src/components/common/ToastContext.jsx:25:26)
+    at GoogleOAuthProvider (http://localhost:5173/node_modules/.vite/deps/@react-oauth_google.js?v=65e06c1b:42:32)
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://reactjs.org/link/error-boundaries to learn more about error boundaries. @ https://static.rocket.new/rocket-web.js?_cfg=https%3A%2F%2Fsangamsa9601back.builtwithrocket.new&_be=https%3A%2F%2Fapplication.rocket.new&_v=0.1.5:0
